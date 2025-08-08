@@ -1,0 +1,8 @@
+# hello.yml
+- name: Hello from manual playbook
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: Show Hello Message
+      debug:
+        msg: "Hello World from AWX manual test!"
