@@ -1,4 +1,3 @@
----
 - name: Create Namespace Network Bridge (Simple Mock)
   hosts: localhost
   gather_facts: false
