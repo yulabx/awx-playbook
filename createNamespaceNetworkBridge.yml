@@ -1,6 +1,9 @@
+---
 - name: Create Namespace Network Bridge (Simple Mock)
   hosts: localhost
+  connection: local
   gather_facts: false
+
   vars:
     # 預設變數，會被 extra_vars 覆寫
     namespace: "default"
@@ -9,21 +12,36 @@
     namespace_labels: {}
     subnet_names: []
     subnet_cidrs: []
-    
+
   tasks:
     - name: Mock - Create namespace network bridge
-      debug:
-        msg: 
-          - "Successfully created namespace network bridge"
-          - "Namespace: {{ namespace }}"
-          - "Network: {{ cluster_network }}"
-          - "Type: {{ network_type }}"
-          - "Subnets: {{ subnet_names | length }} created"
+      ansible.builtin.debug:
+        msg: >
+          Successfully created namespace network bridge
+          Namespace: {{ namespace }}
+          Network: {{ cluster_network }}
+          Type: {{ network_type }}
+          Subnets: {{ subnet_names | length }} created
+
+    - name: Show resolved vars (from AWX extra_vars / template vars)
+      ansible.builtin.debug:
+        msg: |
+          namespace={{ namespace }}
+          cluster_network={{ cluster_network }}
+          network_type={{ network_type }}
+          labels.env={{ namespace_labels.get('env') | default('') }}
+          labels.project.id={{ namespace_labels['project.id'] if 'project.id' in namespace_labels else '' }}
+          subnet_names={{ subnet_names | join(',') }}
+          subnet_cidrs={{ subnet_cidrs | join(',') }}
 
     - name: Set success status
-      set_fact:
+      ansible.builtin.set_fact:
         mock_result:
           status: "completed"
           success: true
           namespace: "{{ namespace }}"
           message: "Network bridge created successfully"
+
+    - name: Print result fact
+      ansible.builtin.debug:
+        var: mock_result
