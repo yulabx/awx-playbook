@@ -1,0 +1,30 @@
+---
+- name: Create Namespace Network Bridge (Simple Mock)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # 預設變數，會被 extra_vars 覆寫
+    namespace: "default"
+    cluster_network: "mgmt"
+    network_type: "UntaggedNetwork"
+    namespace_labels: {}
+    subnet_names: []
+    subnet_cidrs: []
+    
+  tasks:
+    - name: Mock - Create namespace network bridge
+      debug:
+        msg: 
+          - "Successfully created namespace network bridge"
+          - "Namespace: {{ namespace }}"
+          - "Network: {{ cluster_network }}"
+          - "Type: {{ network_type }}"
+          - "Subnets: {{ subnet_names | length }} created"
+
+    - name: Set success status
+      set_fact:
+        mock_result:
+          status: "completed"
+          success: true
+          namespace: "{{ namespace }}"
+          message: "Network bridge created successfully"
