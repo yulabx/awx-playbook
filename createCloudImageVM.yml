@@ -1,0 +1,89 @@
+---
+- name: Create Cloud Image VM (Simple Mock)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # 預設（會被 AWX extra_vars 覆寫）
+    vm_name: "demo-vm"
+    namespace: "default"
+    subnet_name: ""
+    vm_cpu: 1
+    vm_memory: "2Gi"        # e.g. 4Gi
+    vm_disk_size: "10Gi"    # e.g. 20Gi
+    image_id: ""
+    storage_class: ""
+    host_ip: ""
+
+  tasks:
+    - name: Show effective variables
+      ansible.builtin.debug:
+        msg: |
+          vm_name={{ vm_name }}
+          namespace={{ namespace }}
+          subnet_name={{ subnet_name }}
+          vm_cpu={{ vm_cpu }}
+          vm_memory={{ vm_memory }}
+          vm_disk_size={{ vm_disk_size }}
+          image_id={{ image_id }}
+          storage_class={{ storage_class }}
+          host_ip={{ host_ip }}
+
+    # ---- 參數基本檢查 ----
+    - name: Assert required fields are provided
+      ansible.builtin.assert:
+        that:
+          - vm_name | length > 0
+          - namespace | length > 0
+          - subnet_name | length > 0
+          - (vm_cpu | int) >= 1
+          - image_id | length > 0
+          - storage_class | length > 0
+          - host_ip | length > 0
+        fail_msg: "必要參數缺失或不合法（請檢查 vm_name/namespace/subnet_name/vm_cpu/image_id/storage_class/host_ip）。"
+
+    - name: Assert memory/disk format like '4Gi'
+      ansible.builtin.assert:
+        that:
+          - vm_memory is match("^[0-9]+Gi$")
+          - vm_disk_size is match("^[0-9]+Gi$")
+        fail_msg: "vm_memory / vm_disk_size 需為 '數字Gi' 形式，例如 4Gi、20Gi。"
+
+    # ---- 轉換單位方便後續使用（可選）----
+    - name: Compute numeric sizes
+      ansible.builtin.set_fact:
+        vm_memory_mib: "{{ (vm_memory | regex_replace('Gi','') | int) * 1024 }}"
+        vm_disk_gib: "{{ (vm_disk_size | regex_replace('Gi','') | int) }}"
+
+    # ---- 模擬建立 VM（此為 mock）----
+    - name: Mock - Create VM from image
+      ansible.builtin.debug:
+        msg: >
+          Creating VM '{{ vm_name }}' in namespace '{{ namespace }}' on subnet '{{ subnet_name }}'
+          with CPU={{ vm_cpu }} vCPU, Memory={{ vm_memory }} ({{ vm_memory_mib }} MiB),
+          Disk={{ vm_disk_size }} ({{ vm_disk_gib }} GiB), Image='{{ image_id }}',
+          StorageClass='{{ storage_class }}', HostIP={{ host_ip }} ... (mock)
+
+    # ---- 回傳結果物件 ----
+    - name: Set result
+      ansible.builtin.set_fact:
+        result:
+          status: "completed"
+          success: true
+          vm_name: "{{ vm_name }}"
+          namespace: "{{ namespace }}"
+          subnet_name: "{{ subnet_name }}"
+          vm_cpu: "{{ vm_cpu | int }}"
+          vm_memory: "{{ vm_memory }}"
+          vm_memory_mib: "{{ vm_memory_mib }}"
+          vm_disk_size: "{{ vm_disk_size }}"
+          vm_disk_gib: "{{ vm_disk_gib }}"
+          image_id: "{{ image_id }}"
+          storage_class: "{{ storage_class }}"
+          host_ip: "{{ host_ip }}"
+          message: "VM created from image (mock)."
+
+    - name: Print result
+      ansible.builtin.debug:
+        var: result
