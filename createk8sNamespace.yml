@@ -1,8 +1,9 @@
 ---
-- name: Create Kubernetes Namespace (Base64 input - auto decode)
+- name: Create Kubernetes Namespace (microk8s - single base64)
   hosts: localhost
   connection: local
   gather_facts: false
+
   collections:
     - kubernetes.core
 
@@ -12,6 +13,8 @@
     ns_name: "demo"
     labels: {}
     annotations: {}
+
+    # 直接貼 microk8s config 裡的 Base64 資料
     ca_data: ""
     client_certificate_data: ""
     client_key_data: ""
@@ -27,7 +30,7 @@
           - client_key_data | length > 0
         fail_msg: "必要參數未提供（host, ns_name, ca_data, client_certificate_data, client_key_data）"
 
-    - name: Create temp files
+    - name: Create temp files for certs
       ansible.builtin.tempfile:
         state: file
         suffix: "{{ item }}"
@@ -43,42 +46,24 @@
         cert_file: "{{ tmp_files.results[1].path }}"
         key_file: "{{ tmp_files.results[2].path }}"
 
-    # 自動偵測 decode 1 次或 2 次
-    - name: Write CA cert (auto decode)
+    # === 只 decode 一次 ===
+    - name: Decode and write CA cert
       ansible.builtin.copy:
         dest: "{{ ca_file }}"
-        content: >-
-          {% set decoded = ca_data | regex_replace('\\s+', '') | b64decode %}
-          {% if '-----BEGIN' in decoded %}
-          {{ decoded }}
-          {% else %}
-          {{ decoded | b64decode }}
-          {% endif %}
-        mode: '0600'
+        content: "{{ ca_data | b64decode }}"
+        mode: "0600"
 
-    - name: Write client cert (auto decode)
+    - name: Decode and write client cert
       ansible.builtin.copy:
         dest: "{{ cert_file }}"
-        content: >-
-          {% set decoded = client_certificate_data | regex_replace('\\s+', '') | b64decode %}
-          {% if '-----BEGIN' in decoded %}
-          {{ decoded }}
-          {% else %}
-          {{ decoded | b64decode }}
-          {% endif %}
-        mode: '0600'
+        content: "{{ client_certificate_data | b64decode }}"
+        mode: "0600"
 
-    - name: Write client key (auto decode)
+    - name: Decode and write client key
       ansible.builtin.copy:
         dest: "{{ key_file }}"
-        content: >-
-          {% set decoded = client_key_data | regex_replace('\\s+', '') | b64decode %}
-          {% if '-----BEGIN' in decoded %}
-          {{ decoded }}
-          {% else %}
-          {{ decoded | b64decode }}
-          {% endif %}
-        mode: '0600'
+        content: "{{ client_key_data | b64decode }}"
+        mode: "0600"
 
     - name: Verify decoded PEM headers
       ansible.builtin.shell: "head -n 1 {{ item }}"
@@ -89,7 +74,7 @@
       register: pem_headers
       changed_when: false
 
-    - name: Show decoded PEM header lines
+    - name: Debug PEM header lines
       ansible.builtin.debug:
         msg: "{{ pem_headers.results | map(attribute='stdout') | list }}"
 
@@ -110,15 +95,15 @@
         validate_certs: "{{ verify_ssl }}"
       register: ns_result
 
-    - name: Report result
+    - name: Report
       ansible.builtin.debug:
         msg: "Namespace '{{ ns_name }}' ensured. changed={{ ns_result.changed }}"
 
-    - name: Clean temp files
+    - name: Clean up temp cert files
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
-        - "{{ ca_file }}"
-        - "{{ cert_file }}"
-        - "{{ key_file }}"
+        - "{{ ca_file | default('') }}"
+        - "{{ cert_file | default('') }}"
+        - "{{ key_file | default('') }}"
