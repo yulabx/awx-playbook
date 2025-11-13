@@ -8,11 +8,11 @@
     - kubernetes.core
 
   vars:
-    # ---- 選擇認證模式：kubeconfig | token | certificate ----
+    # ---- 認證模式：kubeconfig | token | certificate ----
     auth_mode: "certificate"
 
-    # 共用
-    host: ""           # 例如：https://172.26.196.25:16443
+    # 共用設定
+    host: ""
     verify_ssl: true
     ns_name: "demo"
     labels: {}
@@ -22,15 +22,14 @@
     kubeconfig: "~/.kube/config"
     kubecontext: ""
 
-    # ========== Bearer Token 模式 ==========
-    api_key: ""        # 例如：Bearer xxx.yyy.zzz（請包含 "Bearer "）
+    # ========== token 模式 ==========
+    api_key: ""
 
-    # ========== Client Certificate 模式 ==========
-    # 可貼：1) Base64（可含換行/空白，我們會自動清理並補 padding）
-    #       2) 直接貼 PEM（含 "-----BEGIN ..."），會原樣寫檔不解碼
-    ca_cert_b64: ""
-    client_cert_b64: ""
-    client_key_b64: ""
+    # ========== 憑證模式 ==========
+    # ⚠️ 外部傳入：ca_data / client_certificate_data / client_key_data
+    ca_data: ""
+    client_certificate_data: ""
+    client_key_data: ""
 
   tasks:
     - name: Show effective variables (redacted)
@@ -50,7 +49,7 @@
           - auth_mode in ['kubeconfig','token','certificate']
           - (auth_mode != 'kubeconfig') or (kubeconfig | length > 0)
           - (auth_mode != 'token') or (api_key | length > 0 and host | length > 0)
-          - (auth_mode != 'certificate') or (host | length > 0 and ca_cert_b64 | length > 0 and client_cert_b64 | length > 0 and client_key_b64 | length > 0)
+          - (auth_mode != 'certificate') or (host | length > 0 and ca_data | length > 0 and client_certificate_data | length > 0 and client_key_data | length > 0)
         fail_msg: "參數不完整或不合法：請檢查 ns_name / auth_mode 與對應憑證或連線參數。"
 
     # =========================
@@ -59,82 +58,38 @@
     - name: Ensure namespace via client certificate (with temp files & cleanup)
       when: auth_mode == 'certificate'
       block:
-        - name: Create temp file for CA cert
+        - name: Create temp files for certs
           ansible.builtin.tempfile:
             state: file
-            suffix: "-ca.crt"
-          register: ca_tmp
+            suffix: "{{ item }}"
+          loop:
+            - "-ca.crt"
+            - "-client.crt"
+            - "-client.key"
+          register: tmp_files
 
-        - name: Create temp file for client cert
-          ansible.builtin.tempfile:
-            state: file
-            suffix: "-client.crt"
-          register: cert_tmp
-
-        - name: Create temp file for client key
-          ansible.builtin.tempfile:
-            state: file
-            suffix: "-client.key"
-          register: key_tmp
-
-        # --- 正規化：去除空白/換行並補 Base64 padding；也偵測是否直接是 PEM ---
-        - name: Normalize base64 strings & detect PEM
+        - name: Set temp paths
           ansible.builtin.set_fact:
-            ca_is_pem: "{{ ca_cert_b64 is search('-----BEGIN') }}"
-            cert_is_pem: "{{ client_cert_b64 is search('-----BEGIN') }}"
-            key_is_pem: "{{ client_key_b64 is search('-----BEGIN') }}"
+            ca_file: "{{ tmp_files.results[0].path }}"
+            cert_file: "{{ tmp_files.results[1].path }}"
+            key_file: "{{ tmp_files.results[2].path }}"
 
-            ca_b64_stripped: "{{ (ca_cert_b64 | regex_replace('\\s+', '')) if not ca_is_pem else ca_cert_b64 }}"
-            cert_b64_stripped: "{{ (client_cert_b64 | regex_replace('\\s+', '')) if not cert_is_pem else client_cert_b64 }}"
-            key_b64_stripped: "{{ (client_key_b64 | regex_replace('\\s+', '')) if not key_is_pem else client_key_b64 }}"
-
-            ca_b64_padded: "{{ ca_b64_stripped + ('=' * ((4 - (ca_b64_stripped|length % 4)) % 4)) if not ca_is_pem else ca_b64_stripped }}"
-            cert_b64_padded: "{{ cert_b64_stripped + ('=' * ((4 - (cert_b64_stripped|length % 4)) % 4)) if not cert_is_pem else cert_b64_stripped }}"
-            key_b64_padded: "{{ key_b64_stripped + ('=' * ((4 - (key_b64_stripped|length % 4)) % 4)) if not key_is_pem else key_b64_stripped }}"
-
-        # --- CA ---
-        - name: Write CA cert (PEM passthrough)
-          when: ca_is_pem
+        - name: Decode and write CA cert
           ansible.builtin.copy:
-            dest: "{{ ca_tmp.path }}"
-            content: "{{ ca_b64_padded }}"
+            dest: "{{ ca_file }}"
+            content: "{{ (ca_data | regex_replace('\\s+','') | b64decode) }}"
             mode: "0600"
 
-        - name: Write CA cert (b64 -> file)
-          when: not ca_is_pem
+        - name: Decode and write client cert
           ansible.builtin.copy:
-            dest: "{{ ca_tmp.path }}"
-            content: "{{ ca_b64_padded | b64decode }}"
+            dest: "{{ cert_file }}"
+            content: "{{ (client_certificate_data | regex_replace('\\s+','') | b64decode) }}"
             mode: "0600"
 
-        # --- Client Cert ---
-        - name: Write client cert (PEM passthrough)
-          when: cert_is_pem
+        - name: Decode and write client key
           ansible.builtin.copy:
-            dest: "{{ cert_tmp.path }}"
-            content: "{{ cert_b64_padded }}"
-            mode: "0600"
-
-        - name: Write client cert (b64 -> file)
-          when: not cert_is_pem
-          ansible.builtin.copy:
-            dest: "{{ cert_tmp.path }}"
-            content: "{{ cert_b64_padded | b64decode }}"
-            mode: "0600"
-
-        # --- Client Key ---
-        - name: Write client key (PEM passthrough)
-          when: key_is_pem
-          ansible.builtin.copy:
-            dest: "{{ key_tmp.path }}"
-            content: "{{ key_b64_padded }}"
-            mode: "0600"
-
-        - name: Write client key (b64 -> file)
-          when: not key_is_pem
-          ansible.builtin.copy:
-            dest: "{{ key_tmp.path }}"
-            content: "{{ key_b64_padded | b64decode }}"
+            dest: "{{ key_file }}"
+            content: "{{ (client_key_data | regex_replace('\\s+','') | b64decode) }}"
             mode: "0600"
 
         - name: Ensure namespace exists (certificate)
@@ -148,9 +103,9 @@
                 labels: "{{ labels | default({}) }}"
                 annotations: "{{ annotations | default({}) }}"
             host: "{{ host }}"
-            ssl_ca_cert: "{{ ca_tmp.path }}"
-            cert_file:   "{{ cert_tmp.path }}"
-            key_file:    "{{ key_tmp.path }}"
+            ssl_ca_cert: "{{ ca_file }}"
+            cert_file: "{{ cert_file }}"
+            key_file: "{{ key_file }}"
             validate_certs: "{{ verify_ssl }}"
           register: ns_result_cert
 
@@ -163,9 +118,9 @@
             path: "{{ item }}"
             state: absent
           loop:
-            - "{{ ca_tmp.path | default('') }}"
-            - "{{ cert_tmp.path | default('') }}"
-            - "{{ key_tmp.path | default('') }}"
+            - "{{ ca_file | default('') }}"
+            - "{{ cert_file | default('') }}"
+            - "{{ key_file | default('') }}"
 
     # =========================
     # Token 模式
