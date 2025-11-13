@@ -1,9 +1,8 @@
 ---
-- name: Create Kubernetes Namespace (Base64 certificate input, simple & stable)
+- name: Create Kubernetes Namespace (Base64 input - auto decode)
   hosts: localhost
   connection: local
   gather_facts: false
-
   collections:
     - kubernetes.core
 
@@ -13,14 +12,12 @@
     ns_name: "demo"
     labels: {}
     annotations: {}
-
-    # Base64 格式輸入（AWX 傳入）
     ca_data: ""
     client_certificate_data: ""
     client_key_data: ""
 
   tasks:
-    - name: Ensure required vars
+    - name: Check required inputs
       ansible.builtin.assert:
         that:
           - host | length > 0
@@ -28,9 +25,9 @@
           - ca_data | length > 0
           - client_certificate_data | length > 0
           - client_key_data | length > 0
-        fail_msg: "必要參數未提供 (host, ns_name, ca_data, client_certificate_data, client_key_data)"
+        fail_msg: "必要參數未提供（host, ns_name, ca_data, client_certificate_data, client_key_data）"
 
-    - name: Create temp files for certs
+    - name: Create temp files
       ansible.builtin.tempfile:
         state: file
         suffix: "{{ item }}"
@@ -38,33 +35,52 @@
         - "-ca.crt"
         - "-client.crt"
         - "-client.key"
-      register: temp_files
+      register: tmp_files
 
-    - name: Set fact for file paths
+    - name: Set cert paths
       ansible.builtin.set_fact:
-        ca_file: "{{ temp_files.results[0].path }}"
-        cert_file: "{{ temp_files.results[1].path }}"
-        key_file: "{{ temp_files.results[2].path }}"
+        ca_file: "{{ tmp_files.results[0].path }}"
+        cert_file: "{{ tmp_files.results[1].path }}"
+        key_file: "{{ tmp_files.results[2].path }}"
 
-    - name: Decode and write CA cert
+    # 自動偵測 decode 1 次或 2 次
+    - name: Write CA cert (auto decode)
       ansible.builtin.copy:
         dest: "{{ ca_file }}"
-        content: "{{ ca_data | b64decode }}"
-        mode: "0600"
+        content: >-
+          {% set decoded = ca_data | regex_replace('\\s+', '') | b64decode %}
+          {% if '-----BEGIN' in decoded %}
+          {{ decoded }}
+          {% else %}
+          {{ decoded | b64decode }}
+          {% endif %}
+        mode: '0600'
 
-    - name: Decode and write client cert
+    - name: Write client cert (auto decode)
       ansible.builtin.copy:
         dest: "{{ cert_file }}"
-        content: "{{ client_certificate_data | b64decode }}"
-        mode: "0600"
+        content: >-
+          {% set decoded = client_certificate_data | regex_replace('\\s+', '') | b64decode %}
+          {% if '-----BEGIN' in decoded %}
+          {{ decoded }}
+          {% else %}
+          {{ decoded | b64decode }}
+          {% endif %}
+        mode: '0600'
 
-    - name: Decode and write client key
+    - name: Write client key (auto decode)
       ansible.builtin.copy:
         dest: "{{ key_file }}"
-        content: "{{ client_key_data | b64decode }}"
-        mode: "0600"
+        content: >-
+          {% set decoded = client_key_data | regex_replace('\\s+', '') | b64decode %}
+          {% if '-----BEGIN' in decoded %}
+          {{ decoded }}
+          {% else %}
+          {{ decoded | b64decode }}
+          {% endif %}
+        mode: '0600'
 
-    - name: Verify PEM header lines (for debug)
+    - name: Verify decoded PEM headers
       ansible.builtin.shell: "head -n 1 {{ item }}"
       loop:
         - "{{ ca_file }}"
@@ -73,11 +89,11 @@
       register: pem_headers
       changed_when: false
 
-    - name: Show decoded PEM headers
+    - name: Show decoded PEM header lines
       ansible.builtin.debug:
         msg: "{{ pem_headers.results | map(attribute='stdout') | list }}"
 
-    - name: Ensure namespace exists using certificate
+    - name: Ensure namespace exists
       kubernetes.core.k8s:
         state: present
         definition:
@@ -98,12 +114,11 @@
       ansible.builtin.debug:
         msg: "Namespace '{{ ns_name }}' ensured. changed={{ ns_result.changed }}"
 
-      # 清理動作
-    - name: Clean up temp cert files
+    - name: Clean temp files
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
-        - "{{ ca_file | default('') }}"
-        - "{{ cert_file | default('') }}"
-        - "{{ key_file | default('') }}"
+        - "{{ ca_file }}"
+        - "{{ cert_file }}"
+        - "{{ key_file }}"
