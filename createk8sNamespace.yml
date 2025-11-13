@@ -1,0 +1,136 @@
+---
+- name: Create Kubernetes Namespace (real, supports kubeconfig/token/cert)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  collections:
+    - kubernetes.core
+
+  vars:
+    # ---- 選擇認證模式：kubeconfig | token | certificate ----
+    auth_mode: "certificate"
+
+    # 共用
+    host: ""           # 例如：https://172.26.196.25:16443
+    verify_ssl: true   # 有 CA 時建議 true；若測試用自簽又沒提供 CA，可改 false
+    namespace: "demo"
+    labels: {}
+    annotations: {}
+
+    # ========== kubeconfig 模式 ==========
+    kubeconfig: "~/.kube/config"
+    kubecontext: ""
+
+    # ========== Bearer Token 模式 ==========
+    api_key: ""        # 例如：Bearer xxx.yyy.zzz
+
+    # ========== Client Certificate 模式 ==========
+    # 以下三者可直接貼「Base64 字串」(含 BEGIN/END 介於 b64 的 PEM) —— 我們會在任務中 b64decode 成檔案
+    ca_cert_b64: ""        # CA CERTIFICATE (base64)
+    client_cert_b64: ""    # Client CERTIFICATE (base64)
+    client_key_b64: ""     # Client PRIVATE KEY (base64)
+
+  tasks:
+    - name: Show effective variables (redacted)
+      ansible.builtin.debug:
+        msg:
+          auth_mode: "{{ auth_mode }}"
+          host: "{{ host }}"
+          verify_ssl: "{{ verify_ssl }}"
+          namespace: "{{ namespace }}"
+          labels: "{{ labels }}"
+          annotations: "{{ annotations }}"
+
+    - name: Basic param checks
+      ansible.builtin.assert:
+        that:
+          - namespace | length > 0
+          - auth_mode in ['kubeconfig','token','certificate']
+          - (auth_mode != 'kubeconfig') or (kubeconfig | length > 0)
+          - (auth_mode != 'token') or (api_key | length > 0)
+          - (auth_mode != 'certificate') or (host | length > 0 and ca_cert_b64 | length > 0 and client_cert_b64 | length > 0 and client_key_b64 | length > 0)
+        fail_msg: "參數不完整或不合法：請檢查 namespace / auth_mode 與對應憑證或連線參數。"
+
+    # ===== 憑證式：建立暫存檔 =====
+    - name: Create temp file for CA cert
+      when: auth_mode == 'certificate'
+      ansible.builtin.tempfile:
+        state: file
+        suffix: "-ca.crt"
+      register: ca_tmp
+
+    - name: Create temp file for client cert
+      when: auth_mode == 'certificate'
+      ansible.builtin.tempfile:
+        state: file
+        suffix: "-client.crt"
+      register: cert_tmp
+
+    - name: Create temp file for client key
+      when: auth_mode == 'certificate'
+      ansible.builtin.tempfile:
+        state: file
+        suffix: "-client.key"
+      register: key_tmp
+
+    - name: Write CA cert (b64 -> file)
+      when: auth_mode == 'certificate'
+      ansible.builtin.copy:
+        dest: "{{ ca_tmp.path }}"
+        content: "{{ ca_cert_b64 | b64decode }}"
+        mode: "0600"
+
+    - name: Write client cert (b64 -> file)
+      when: auth_mode == 'certificate'
+      ansible.builtin.copy:
+        dest: "{{ cert_tmp.path }}"
+        content: "{{ client_cert_b64 | b64decode }}"
+        mode: "0600"
+
+    - name: Write client key (b64 -> file)
+      when: auth_mode == 'certificate'
+      ansible.builtin.copy:
+        dest: "{{ key_tmp.path }}"
+        content: "{{ client_key_b64 | b64decode }}"
+        mode: "0600"
+
+    # ===== 建立 Namespace (idempotent) =====
+    - name: Ensure namespace exists with labels/annotations
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ namespace }}"
+            labels: "{{ labels | default({}) }}"
+            annotations: "{{ annotations | default({}) }}"
+        # kubeconfig 模式
+        kubeconfig: "{{ kubeconfig if auth_mode == 'kubeconfig' else omit }}"
+        context: "{{ kubecontext if (auth_mode == 'kubeconfig' and kubecontext|length>0) else omit }}"
+        # token 模式
+        host: "{{ host if auth_mode in ['token','certificate'] else omit }}"
+        api_key: "{{ api_key if auth_mode == 'token' else omit }}"
+        # 憑證式
+        ssl_ca_cert: "{{ ca_tmp.path if auth_mode == 'certificate' else omit }}"
+        cert_file:   "{{ cert_tmp.path if auth_mode == 'certificate' else omit }}"
+        key_file:    "{{ key_tmp.path if auth_mode == 'certificate' else omit }}"
+        validate_certs: "{{ verify_ssl }}"
+      register: ns_result
+
+    - name: Report result
+      ansible.builtin.debug:
+        msg: "Namespace '{{ namespace }}' ensured. changed={{ ns_result.changed }}"
+
+  # ===== 清理暫存檔（即使失敗也會執行）=====
+  always:
+    - name: Remove temp cert files
+      when: auth_mode == 'certificate'
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ca_tmp.path | default('') }}"
+        - "{{ cert_tmp.path | default('') }}"
+        - "{{ key_tmp.path | default('') }}"
