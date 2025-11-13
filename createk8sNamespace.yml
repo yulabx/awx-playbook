@@ -13,8 +13,8 @@
 
     # 共用
     host: ""           # 例如：https://172.26.196.25:16443
-    verify_ssl: true   # 有 CA 建議 true；自簽測試且未提供 CA 可暫時 false
-    namespace: "demo"
+    verify_ssl: true
+    ns_name: "demo"
     labels: {}
     annotations: {}
 
@@ -23,13 +23,14 @@
     kubecontext: ""
 
     # ========== Bearer Token 模式 ==========
-    api_key: ""        # 例如：Bearer xxx.yyy.zzz（請包含 "Bearer " 字首）
+    api_key: ""        # 例如：Bearer xxx.yyy.zzz（請包含 "Bearer "）
 
     # ========== Client Certificate 模式 ==========
-    # 以下三者可直接貼 Base64（含 BEGIN/END 的 PEM 經過 b64），任務中會 b64decode 成檔案
-    ca_cert_b64: ""        # CA CERTIFICATE (base64)
-    client_cert_b64: ""    # Client CERTIFICATE (base64)
-    client_key_b64: ""     # Client PRIVATE KEY (base64)
+    # 可貼：1) Base64（可含換行/空白，我們會自動清理並補 padding）
+    #       2) 直接貼 PEM（含 "-----BEGIN ..."），會原樣寫檔不解碼
+    ca_cert_b64: ""
+    client_cert_b64: ""
+    client_key_b64: ""
 
   tasks:
     - name: Show effective variables (redacted)
@@ -38,19 +39,19 @@
           auth_mode: "{{ auth_mode }}"
           host: "{{ host }}"
           verify_ssl: "{{ verify_ssl }}"
-          namespace: "{{ namespace }}"
+          ns_name: "{{ ns_name }}"
           labels: "{{ labels }}"
           annotations: "{{ annotations }}"
 
     - name: Basic param checks
       ansible.builtin.assert:
         that:
-          - namespace | length > 0
+          - ns_name | length > 0
           - auth_mode in ['kubeconfig','token','certificate']
           - (auth_mode != 'kubeconfig') or (kubeconfig | length > 0)
           - (auth_mode != 'token') or (api_key | length > 0 and host | length > 0)
           - (auth_mode != 'certificate') or (host | length > 0 and ca_cert_b64 | length > 0 and client_cert_b64 | length > 0 and client_key_b64 | length > 0)
-        fail_msg: "參數不完整或不合法：請檢查 namespace / auth_mode 與對應憑證或連線參數。"
+        fail_msg: "參數不完整或不合法：請檢查 ns_name / auth_mode 與對應憑證或連線參數。"
 
     # =========================
     # Certificate 模式（含清理）
@@ -76,22 +77,64 @@
             suffix: "-client.key"
           register: key_tmp
 
-        - name: Write CA cert (b64 -> file)
+        # --- 正規化：去除空白/換行並補 Base64 padding；也偵測是否直接是 PEM ---
+        - name: Normalize base64 strings & detect PEM
+          ansible.builtin.set_fact:
+            ca_is_pem: "{{ ca_cert_b64 is search('-----BEGIN') }}"
+            cert_is_pem: "{{ client_cert_b64 is search('-----BEGIN') }}"
+            key_is_pem: "{{ client_key_b64 is search('-----BEGIN') }}"
+
+            ca_b64_stripped: "{{ (ca_cert_b64 | regex_replace('\\s+', '')) if not ca_is_pem else ca_cert_b64 }}"
+            cert_b64_stripped: "{{ (client_cert_b64 | regex_replace('\\s+', '')) if not cert_is_pem else client_cert_b64 }}"
+            key_b64_stripped: "{{ (client_key_b64 | regex_replace('\\s+', '')) if not key_is_pem else client_key_b64 }}"
+
+            ca_b64_padded: "{{ ca_b64_stripped + ('=' * ((4 - (ca_b64_stripped|length % 4)) % 4)) if not ca_is_pem else ca_b64_stripped }}"
+            cert_b64_padded: "{{ cert_b64_stripped + ('=' * ((4 - (cert_b64_stripped|length % 4)) % 4)) if not cert_is_pem else cert_b64_stripped }}"
+            key_b64_padded: "{{ key_b64_stripped + ('=' * ((4 - (key_b64_stripped|length % 4)) % 4)) if not key_is_pem else key_b64_stripped }}"
+
+        # --- CA ---
+        - name: Write CA cert (PEM passthrough)
+          when: ca_is_pem
           ansible.builtin.copy:
             dest: "{{ ca_tmp.path }}"
-            content: "{{ ca_cert_b64 | b64decode }}"
+            content: "{{ ca_b64_padded }}"
+            mode: "0600"
+
+        - name: Write CA cert (b64 -> file)
+          when: not ca_is_pem
+          ansible.builtin.copy:
+            dest: "{{ ca_tmp.path }}"
+            content: "{{ ca_b64_padded | b64decode }}"
+            mode: "0600"
+
+        # --- Client Cert ---
+        - name: Write client cert (PEM passthrough)
+          when: cert_is_pem
+          ansible.builtin.copy:
+            dest: "{{ cert_tmp.path }}"
+            content: "{{ cert_b64_padded }}"
             mode: "0600"
 
         - name: Write client cert (b64 -> file)
+          when: not cert_is_pem
           ansible.builtin.copy:
             dest: "{{ cert_tmp.path }}"
-            content: "{{ client_cert_b64 | b64decode }}"
+            content: "{{ cert_b64_padded | b64decode }}"
+            mode: "0600"
+
+        # --- Client Key ---
+        - name: Write client key (PEM passthrough)
+          when: key_is_pem
+          ansible.builtin.copy:
+            dest: "{{ key_tmp.path }}"
+            content: "{{ key_b64_padded }}"
             mode: "0600"
 
         - name: Write client key (b64 -> file)
+          when: not key_is_pem
           ansible.builtin.copy:
             dest: "{{ key_tmp.path }}"
-            content: "{{ client_key_b64 | b64decode }}"
+            content: "{{ key_b64_padded | b64decode }}"
             mode: "0600"
 
         - name: Ensure namespace exists (certificate)
@@ -101,7 +144,7 @@
               apiVersion: v1
               kind: Namespace
               metadata:
-                name: "{{ namespace }}"
+                name: "{{ ns_name }}"
                 labels: "{{ labels | default({}) }}"
                 annotations: "{{ annotations | default({}) }}"
             host: "{{ host }}"
@@ -113,7 +156,7 @@
 
         - name: Report result (certificate)
           ansible.builtin.debug:
-            msg: "Namespace '{{ namespace }}' ensured (certificate). changed={{ ns_result_cert.changed }}"
+            msg: "Namespace '{{ ns_name }}' ensured (certificate). changed={{ ns_result_cert.changed }}"
       always:
         - name: Remove temp cert files
           ansible.builtin.file:
@@ -135,7 +178,7 @@
           apiVersion: v1
           kind: Namespace
           metadata:
-            name: "{{ namespace }}"
+            name: "{{ ns_name }}"
             labels: "{{ labels | default({}) }}"
             annotations: "{{ annotations | default({}) }}"
         host: "{{ host }}"
@@ -146,7 +189,7 @@
     - name: Report result (token)
       when: auth_mode == 'token'
       ansible.builtin.debug:
-        msg: "Namespace '{{ namespace }}' ensured (token). changed={{ ns_result_token.changed }}"
+        msg: "Namespace '{{ ns_name }}' ensured (token). changed={{ ns_result_token.changed }}"
 
     # =========================
     # Kubeconfig 模式
@@ -159,7 +202,7 @@
           apiVersion: v1
           kind: Namespace
           metadata:
-            name: "{{ namespace }}"
+            name: "{{ ns_name }}"
             labels: "{{ labels | default({}) }}"
             annotations: "{{ annotations | default({}) }}"
         kubeconfig: "{{ kubeconfig }}"
@@ -170,4 +213,4 @@
     - name: Report result (kubeconfig)
       when: auth_mode == 'kubeconfig'
       ansible.builtin.debug:
-        msg: "Namespace '{{ namespace }}' ensured (kubeconfig). changed={{ ns_result_kcfg.changed }}"
+        msg: "Namespace '{{ ns_name }}' ensured (kubeconfig). changed={{ ns_result_kcfg.changed }}"
