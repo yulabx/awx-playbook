@@ -1,5 +1,5 @@
 ---
-- name: Create Kubernetes Namespace (real, certificate mode - Base64 input)
+- name: Create Kubernetes Namespace (Base64 certificate input, simple & stable)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -13,115 +13,97 @@
     ns_name: "demo"
     labels: {}
     annotations: {}
+
+    # Base64 格式輸入（AWX 傳入）
     ca_data: ""
     client_certificate_data: ""
     client_key_data: ""
 
   tasks:
-    - name: Create namespace via certificate (with cleanup)
-      block:
-        - name: Check required inputs
-          ansible.builtin.assert:
-            that:
-              - host | length > 0
-              - ns_name | length > 0
-              - ca_data | length > 0
-              - client_certificate_data | length > 0
-              - client_key_data | length > 0
-            fail_msg: "必要參數未提供（host, ns_name, ca_data, client_certificate_data, client_key_data）"
+    - name: Ensure required vars
+      ansible.builtin.assert:
+        that:
+          - host | length > 0
+          - ns_name | length > 0
+          - ca_data | length > 0
+          - client_certificate_data | length > 0
+          - client_key_data | length > 0
+        fail_msg: "必要參數未提供 (host, ns_name, ca_data, client_certificate_data, client_key_data)"
 
-        - name: Create temp files for certs
-          ansible.builtin.tempfile:
-            state: file
-            suffix: "{{ item }}"
-          loop:
-            - "-ca.crt"
-            - "-client.crt"
-            - "-client.key"
-          register: tmp_files
+    - name: Create temp files for certs
+      ansible.builtin.tempfile:
+        state: file
+        suffix: "{{ item }}"
+      loop:
+        - "-ca.crt"
+        - "-client.crt"
+        - "-client.key"
+      register: temp_files
 
-        - name: Set cert paths
-          ansible.builtin.set_fact:
-            ca_file: "{{ tmp_files.results[0].path }}"
-            cert_file: "{{ tmp_files.results[1].path }}"
-            key_file: "{{ tmp_files.results[2].path }}"
+    - name: Set fact for file paths
+      ansible.builtin.set_fact:
+        ca_file: "{{ temp_files.results[0].path }}"
+        cert_file: "{{ temp_files.results[1].path }}"
+        key_file: "{{ temp_files.results[2].path }}"
 
-        - name: Write CA cert (auto-detect single/double base64)
-          ansible.builtin.copy:
-            dest: "{{ ca_file }}"
-            content: >-
-              {% set d1 = ca_data | regex_replace('\\s+','') | b64decode %}
-              {% if '-----BEGIN' in d1 %}
-              {{ d1 }}
-              {% else %}
-              {{ d1 | b64decode }}
-              {% endif %}
-            mode: "0600"
+    - name: Decode and write CA cert
+      ansible.builtin.copy:
+        dest: "{{ ca_file }}"
+        content: "{{ ca_data | b64decode }}"
+        mode: "0600"
 
-        - name: Write client cert (auto-detect single/double base64)
-          ansible.builtin.copy:
-            dest: "{{ cert_file }}"
-            content: >-
-              {% set d1 = client_certificate_data | regex_replace('\\s+','') | b64decode %}
-              {% if '-----BEGIN' in d1 %}
-              {{ d1 }}
-              {% else %}
-              {{ d1 | b64decode }}
-              {% endif %}
-            mode: "0600"
+    - name: Decode and write client cert
+      ansible.builtin.copy:
+        dest: "{{ cert_file }}"
+        content: "{{ client_certificate_data | b64decode }}"
+        mode: "0600"
 
-        - name: Write client key (auto-detect single/double base64)
-          ansible.builtin.copy:
-            dest: "{{ key_file }}"
-            content: >-
-              {% set d1 = client_key_data | regex_replace('\\s+','') | b64decode %}
-              {% if '-----BEGIN' in d1 %}
-              {{ d1 }}
-              {% else %}
-              {{ d1 | b64decode }}
-              {% endif %}
-            mode: "0600"
+    - name: Decode and write client key
+      ansible.builtin.copy:
+        dest: "{{ key_file }}"
+        content: "{{ client_key_data | b64decode }}"
+        mode: "0600"
 
-        - name: Verify PEM headers (for debug)
-          ansible.builtin.shell: "head -n 1 {{ item }}"
-          loop:
-            - "{{ ca_file }}"
-            - "{{ cert_file }}"
-            - "{{ key_file }}"
-          register: pem_headers
-          changed_when: false
+    - name: Verify PEM header lines (for debug)
+      ansible.builtin.shell: "head -n 1 {{ item }}"
+      loop:
+        - "{{ ca_file }}"
+        - "{{ cert_file }}"
+        - "{{ key_file }}"
+      register: pem_headers
+      changed_when: false
 
-        - name: Show decoded PEM headers
-          ansible.builtin.debug:
-            msg: "{{ pem_headers.results | map(attribute='stdout') | list }}"
+    - name: Show decoded PEM headers
+      ansible.builtin.debug:
+        msg: "{{ pem_headers.results | map(attribute='stdout') | list }}"
 
-        - name: Ensure namespace exists (via certificate)
-          kubernetes.core.k8s:
-            state: present
-            definition:
-              apiVersion: v1
-              kind: Namespace
-              metadata:
-                name: "{{ ns_name }}"
-                labels: "{{ labels }}"
-                annotations: "{{ annotations }}"
-            host: "{{ host }}"
-            ssl_ca_cert: "{{ ca_file }}"
-            cert_file: "{{ cert_file }}"
-            key_file: "{{ key_file }}"
-            validate_certs: "{{ verify_ssl }}"
-          register: ns_result
+    - name: Ensure namespace exists using certificate
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ ns_name }}"
+            labels: "{{ labels }}"
+            annotations: "{{ annotations }}"
+        host: "{{ host }}"
+        ssl_ca_cert: "{{ ca_file }}"
+        cert_file: "{{ cert_file }}"
+        key_file: "{{ key_file }}"
+        validate_certs: "{{ verify_ssl }}"
+      register: ns_result
 
-        - name: Report
-          ansible.builtin.debug:
-            msg: "Namespace '{{ ns_name }}' ensured. changed={{ ns_result.changed }}"
+    - name: Report result
+      ansible.builtin.debug:
+        msg: "Namespace '{{ ns_name }}' ensured. changed={{ ns_result.changed }}"
 
-      always:
-        - name: Clean up temporary cert files
-          ansible.builtin.file:
-            path: "{{ item }}"
-            state: absent
-          loop:
-            - "{{ ca_file | default('') }}"
-            - "{{ cert_file | default('') }}"
-            - "{{ key_file | default('') }}"
+      # 清理動作
+    - name: Clean up temp cert files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ca_file | default('') }}"
+        - "{{ cert_file | default('') }}"
+        - "{{ key_file | default('') }}"
