@@ -26,7 +26,7 @@
     api_key: ""
 
     # ========== 憑證模式 ==========
-    # ⚠️ 外部傳入：ca_data / client_certificate_data / client_key_data
+    # ⚠️ 從外部變數帶入（AWX extra_vars）
     ca_data: ""
     client_certificate_data: ""
     client_key_data: ""
@@ -77,19 +77,37 @@
         - name: Decode and write CA cert
           ansible.builtin.copy:
             dest: "{{ ca_file }}"
-            content: "{{ (ca_data | regex_replace('\\s+','') | b64decode) }}"
+            content: >-
+              {% set decoded = ca_data | regex_replace('\\s+','') | b64decode %}
+              {% if '-----BEGIN' in decoded %}
+              {{ decoded }}
+              {% else %}
+              {{ decoded | b64decode }}
+              {% endif %}
             mode: "0600"
 
         - name: Decode and write client cert
           ansible.builtin.copy:
             dest: "{{ cert_file }}"
-            content: "{{ (client_certificate_data | regex_replace('\\s+','') | b64decode) }}"
+            content: >-
+              {% set decoded = client_certificate_data | regex_replace('\\s+','') | b64decode %}
+              {% if '-----BEGIN' in decoded %}
+              {{ decoded }}
+              {% else %}
+              {{ decoded | b64decode }}
+              {% endif %}
             mode: "0600"
 
         - name: Decode and write client key
           ansible.builtin.copy:
             dest: "{{ key_file }}"
-            content: "{{ (client_key_data | regex_replace('\\s+','') | b64decode) }}"
+            content: >-
+              {% set decoded = client_key_data | regex_replace('\\s+','') | b64decode %}
+              {% if '-----BEGIN' in decoded %}
+              {{ decoded }}
+              {% else %}
+              {{ decoded | b64decode }}
+              {% endif %}
             mode: "0600"
 
         - name: Ensure namespace exists (certificate)
@@ -112,6 +130,7 @@
         - name: Report result (certificate)
           ansible.builtin.debug:
             msg: "Namespace '{{ ns_name }}' ensured (certificate). changed={{ ns_result_cert.changed }}"
+
       always:
         - name: Remove temp cert files
           ansible.builtin.file:
