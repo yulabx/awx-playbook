@@ -120,7 +120,7 @@
         name: "{{ project_name }}-{{ item.name }}"
         instance_type: "{{ item.instance_type }}"
         image_id: "{{ item.ami_id }}"
-        key_name: "{{ item.key_name | default(omit) }}"  # 如不提供，則不設定 Key (使用 Session Manager)
+        key_name: "{{ item.key_name | default(default_key_name) }}"  # 自動使用專案 Key
         
         # 根據 subnet_name 從 subnet_map 查找 ID
         vpc_subnet_id: "{{ subnet_map[project_name + '-' + item.subnet_name + '-subnet'] }}"
