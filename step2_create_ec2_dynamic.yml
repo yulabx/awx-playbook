@@ -176,7 +176,7 @@
           - "VPC: {{ ec2_info.vpc_id }}"
           - "Region: {{ ec2_info.region }}"
           - ""
-          - "{% for instance in ec2_info.instances %}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{{ instance.tags.Name }}\n  Instance ID: {{ instance.instance_id }}\n  Instance Type: {{ instance.instance_type }}\n  Private IP: {{ instance.private_ip_address }}\n  {% if instance.public_ip_address is defined %}Public IP: {{ instance.public_ip_address }}\n  {% endif %}Subnet: {{ instance.tags.Subnet }}\n  AZ: {{ instance.placement.availability_zone }}\n  State: {{ instance.state.name }}\n  {% if instance.tags.Role is defined %}Role: {{ instance.tags.Role }}\n  {% endif %}\n{% endfor %}"
+          - "{% for instance in ec2_info.instances %}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{{ instance.tags.Name }}\n  Instance ID: {{ instance.instance_id }}\n  Instance Type: {{ instance.instance_type }}\n  Private IP: {{ instance.private_ip_address }}\n  {% if instance.public_ip_address is defined %}Public IP: {{ instance.public_ip_address }}\n  {% endif %}Subnet: {{ instance.tags.SubnetName }}\n  AZ: {{ instance.placement.availability_zone }}\n  State: {{ instance.state.name }}\n  {% if instance.tags.Role is defined %}Role: {{ instance.tags.Role }}\n  {% endif %}\n{% endfor %}"
           - "══════════════════════════════════════════════════════════"
           - "  📋 連線方式"
           - "══════════════════════════════════════════════════════════"
