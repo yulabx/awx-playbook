@@ -126,10 +126,12 @@
         security_groups:
           - "{{ sg_map[item.subnet_name] }}"
         
-        # 網路設定
-        network:
-          assign_public_ip: "{{ item.assign_public_ip }}"
-          private_ip_address: "{{ item.private_ip }}"
+        # 網路設定 (使用新的 network_interfaces 參數)
+        network_interfaces:
+          - assign_public_ip: "{{ item.assign_public_ip }}"
+            private_ip_address: "{{ item.private_ip }}"
+            device_index: 0
+            delete_on_termination: true
         
         # 儲存設定
         volumes:
