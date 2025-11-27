@@ -6,6 +6,7 @@
   gather_facts: true
   collections:
     - amazon.aws
+    - community.aws
 
   vars:
     aws_region: ap-northeast-1
@@ -139,10 +140,10 @@
         is_new_key: "{{ keypair_result.key.private_key is defined }}"
 
     - name: Store private key (Secrets Manager)
-      amazon.aws.secretsmanager_secret:
+      community.aws.aws_secret:
         name: "{{ project_name }}/ssh-keypair"
         description: "SSH keypair for {{ project_name }}"
-        secret_string: "{{ private_key_content }}"
+        secret: "{{ private_key_content }}"
         region: "{{ aws_region }}"
         state: present
       when: is_new_key | bool
