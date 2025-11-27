@@ -8,17 +8,11 @@
   gather_facts: true
   collections:
     - amazon.aws
-    - community.aws
 
   vars:
     aws_region: ap-northeast-1
     default_az: "{{ aws_region }}a"
     office_ip: "203.0.113.10/32"   # 修改成公司實際 IP
-
-    # Step1 用到的三個 AWX Survey 變數：
-    # project_name
-    # vpc_cidr
-    # subnets[]
 
   tasks:
 
@@ -42,7 +36,7 @@
         vpc_id: "{{ vpc_result.vpc.id }}"
 
     # ════════════════════════════════════════════════
-    # Task 2: Create Internet Gateway (only if public subnets exist)
+    # Task 2: IGW
     # ════════════════════════════════════════════════
     - name: Create Internet Gateway
       amazon.aws.ec2_vpc_igw:
@@ -61,7 +55,7 @@
       when: igw_result.gateway_id is defined
 
     # ════════════════════════════════════════════════
-    # Task 3: Create Subnets
+    # Task 3: Subnets
     # ════════════════════════════════════════════════
     - name: Create Subnets
       amazon.aws.ec2_vpc_subnet:
@@ -81,7 +75,7 @@
       register: subnet_results
 
     # ════════════════════════════════════════════════
-    # Task 4: Route Tables
+    # Route Tables
     # ════════════════════════════════════════════════
     - name: Get public subnets
       set_fact:
@@ -124,7 +118,7 @@
       when: private_subnet_ids | length > 0
 
     # ════════════════════════════════════════════════
-    # Task 5: Security Groups（每個 Subnet 一個）
+    # Task 5: Security Groups
     # ════════════════════════════════════════════════
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
@@ -137,25 +131,19 @@
           Name: "{{ project_name }}-{{ item.name }}-sg"
           Project: "{{ project_name }}"
           Subnet: "{{ item.name }}"
-
-        # 為了避免 parser 出錯，這裡先用「簡單固定規則」
-        # 你之後如果要再做動態規則，我們可以另外重構
         rules:
           - proto: tcp
             from_port: 22
             to_port: 22
             cidr_ip: "{{ office_ip }}"
-            rule_desc: "SSH from office IP"
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
-            rule_desc: "Allow all outbound"
-
       loop: "{{ subnets }}"
       register: sg_results
 
     # ════════════════════════════════════════════════
-    # Task 6: Create SSH Key Pair
+    # Task 6: SSH Key Pair
     # ════════════════════════════════════════════════
     - name: Create key pair
       amazon.aws.ec2_key:
@@ -171,15 +159,15 @@
         is_new_key: "{{ keypair_result.key.private_key is defined }}"
 
     # ════════════════════════════════════════════════
-    # Task 7: 儲存私鑰到 Secrets Manager（如果是新建立的 Key）
+    # Task 7: Store SSH Private Key in AWS Secrets Manager
     # ════════════════════════════════════════════════
     - name: Store private key (Secrets Manager)
-      community.aws.aws_secret:
-        region: "{{ aws_region }}"
+      amazon.aws.secretsmanager_secret:
         name: "{{ project_name }}/ssh-keypair"
-        secret_type: "string"
-        secret: "{{ private_key_content }}"
         description: "SSH keypair for {{ project_name }}"
+        secret_string: "{{ private_key_content }}"
+        region: "{{ aws_region }}"
+        state: present
       when: is_new_key | bool
       ignore_errors: yes
 
@@ -193,4 +181,4 @@
           - "Subnets: {{ subnets | length }}"
           - "Security Groups: {{ sg_results.results | length }}"
           - "SSH Key: {{ key_name }}"
-          - "SecretsManager: {{ project_name }}/ssh-keypair (if new)"
+          - "Saved To Secrets Manager: {{ project_name }}/ssh-keypair (if new)"
