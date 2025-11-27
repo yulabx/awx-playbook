@@ -140,13 +140,7 @@
               delete_on_termination: true
         
         # 標籤
-        tags:
-          Name: "{{ project_name }}-{{ item.name }}"
-          Project: "{{ project_name }}"
-          SubnetName: "{{ item.subnet_name }}"
-          ManagedBy: Ansible
-          CreatedDate: "{{ ansible_date_time.date }}"
-          "{{ item.tags | default({}) }}"
+        tags: "{{ {'Name': project_name + '-' + item.name, 'Project': project_name, 'SubnetName': item.subnet_name, 'ManagedBy': 'Ansible', 'CreatedDate': ansible_date_time.date} | combine(item.tags | default({})) }}"
         
         state: running
         wait: yes
