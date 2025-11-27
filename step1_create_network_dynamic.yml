@@ -284,7 +284,7 @@
     # Task 8: 儲存私鑰到 AWS Secrets Manager (企業級安全儲存)
     # ════════════════════════════════════════════════
     - name: Store private key in AWS Secrets Manager
-      community.aws.secretsmanager_secret:
+      community.aws.aws_secret:
         region: "{{ aws_region }}"
         name: "{{ project_name }}/ssh-keypair"
         description: "SSH Private Key for project {{ project_name }}"
