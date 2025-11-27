@@ -1,7 +1,5 @@
 ---
-# ════════════════════════════════════════════════════════════════
-# Step 1: 建立 VPC / Subnets / Security Groups / Route Tables / SSH Key
-# ════════════════════════════════════════════════════════════════
+# Step 1: Create VPC / Subnets / Security Groups / Route Tables / SSH Key
 
 - name: Step 1 - Create VPC, Subnets, Security Groups
   hosts: localhost
@@ -12,13 +10,10 @@
   vars:
     aws_region: ap-northeast-1
     default_az: "{{ aws_region }}a"
-    office_ip: "203.0.113.10/32"   # 修改成公司實際 IP
+    office_ip: "203.0.113.10/32"
 
   tasks:
 
-    # ════════════════════════════════════════════════
-    # Task 1: Create VPC
-    # ════════════════════════════════════════════════
     - name: Create VPC
       amazon.aws.ec2_vpc_net:
         region: "{{ aws_region }}"
@@ -35,9 +30,6 @@
       set_fact:
         vpc_id: "{{ vpc_result.vpc.id }}"
 
-    # ════════════════════════════════════════════════
-    # Task 2: IGW
-    # ════════════════════════════════════════════════
     - name: Create Internet Gateway
       amazon.aws.ec2_vpc_igw:
         region: "{{ aws_region }}"
@@ -54,9 +46,6 @@
         igw_id: "{{ igw_result.gateway_id }}"
       when: igw_result.gateway_id is defined
 
-    # ════════════════════════════════════════════════
-    # Task 3: Subnets
-    # ════════════════════════════════════════════════
     - name: Create Subnets
       amazon.aws.ec2_vpc_subnet:
         region: "{{ aws_region }}"
@@ -74,9 +63,6 @@
       loop: "{{ subnets }}"
       register: subnet_results
 
-    # ════════════════════════════════════════════════
-    # Route Tables
-    # ════════════════════════════════════════════════
     - name: Get public subnets
       set_fact:
         public_subnet_ids: "{{ subnet_results.results |
@@ -117,9 +103,6 @@
         routes: []
       when: private_subnet_ids | length > 0
 
-    # ════════════════════════════════════════════════
-    # Task 5: Security Groups
-    # ════════════════════════════════════════════════
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
         region: "{{ aws_region }}"
@@ -142,9 +125,6 @@
       loop: "{{ subnets }}"
       register: sg_results
 
-    # ════════════════════════════════════════════════
-    # Task 6: SSH Key Pair
-    # ════════════════════════════════════════════════
     - name: Create key pair
       amazon.aws.ec2_key:
         region: "{{ aws_region }}"
@@ -158,9 +138,6 @@
         private_key_content: "{{ keypair_result.key.private_key | default('') }}"
         is_new_key: "{{ keypair_result.key.private_key is defined }}"
 
-    # ════════════════════════════════════════════════
-    # Task 7: Store SSH Private Key in AWS Secrets Manager
-    # ════════════════════════════════════════════════
     - name: Store private key (Secrets Manager)
       amazon.aws.secretsmanager_secret:
         name: "{{ project_name }}/ssh-keypair"
@@ -171,9 +148,6 @@
       when: is_new_key | bool
       ignore_errors: yes
 
-    # ════════════════════════════════════════════════
-    # Task 8: Summary
-    # ════════════════════════════════════════════════
     - name: Summary
       debug:
         msg:
