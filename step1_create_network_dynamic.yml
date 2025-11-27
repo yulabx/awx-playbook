@@ -1,0 +1,368 @@
+---
+# ════════════════════════════════════════════════════════════════
+# Step 1: 建立 VPC 和多個 Subnet + 對應的 Security Groups
+# ════════════════════════════════════════════════════════════════
+# 使用場景: 管理員審核使用者申請後，分配 CIDR 並執行此腳本
+# 
+# 工作流程:
+#   1. 使用者在前端表單申請 (選擇 Subnet 數量、大小、類型、用途)
+#   2. 管理員審核後，在此檔案填入實際分配的 CIDR
+#   3. 執行此腳本建立 VPC、Subnet、SG、IGW、Route Table
+#   4. 產生基礎設施資訊檔，供 Step 2 建立 EC2 使用
+# ════════════════════════════════════════════════════════════════
+
+- name: Step 1 - Create VPC, Subnets and Security Groups
+  hosts: localhost
+  gather_facts: false
+  
+  vars:
+    # ─────────────────────────────────────────────
+    # 基本設定 (固定值 - 不需從 AWX Survey 傳入)
+    # ─────────────────────────────────────────────
+    aws_region: ap-northeast-1
+    default_az: "{{ aws_region }}a"
+    
+    # 公司辦公室固定 IP (用於 Bastion SSH 限制)
+    office_ip: "203.0.113.10/32"      # ⚠️ 改成實際的公司 IP
+    
+    # ─────────────────────────────────────────────
+    # 從 AWX Survey / API 傳入的參數
+    # ─────────────────────────────────────────────
+    # project_name: "ProjectX-prod"   # ⬅️ 從 AWX Extra Variables 傳入
+    # vpc_cidr: "10.100.0.0/16"       # ⬅️ 從 AWX Extra Variables 傳入
+    # subnets: []                     # ⬅️ 從 AWX Extra Variables 傳入 (JSON 陣列)
+    
+    # ─────────────────────────────────────────────
+    # Subnet 定義範例 (AWX Survey 會傳入類似格式)
+    # ─────────────────────────────────────────────
+    # subnets:
+    #   - name: bastion
+    #     cidr: 10.100.1.0/28
+    #     is_public: true
+    #     purpose: "DMZ / 跳板機專用"
+    #   
+    #   - name: app
+    #     cidr: 10.100.10.0/24
+    #     is_public: false
+    #     purpose: "內部 API / 應用伺服器"
+    #   
+    #   - name: db
+    #     cidr: 10.100.20.0/24
+    #     is_public: false
+    #     purpose: "資料庫專用"
+    
+    # ⚠️ 注意: subnets 不包含 'az' 欄位，由腳本自動加上
+    
+    # ─────────────────────────────────────────────
+    # Security Group 規則定義
+    # ⚠️ 根據實際的 subnet 名稱動態調整規則
+    # ─────────────────────────────────────────────
+    # 
+    # 規則說明:
+    # 1. 每個 Subnet 自動建立對應的 Security Group
+    # 2. 所有 Subnet 都允許從 Bastion SSH (如果有 bastion)
+    # 3. 其他規則需要在建立後手動調整，或使用 purpose 欄位判斷
+    # 
+    # 建議做法:
+    #   - purpose 包含 "DMZ" 或 "Bastion" → 只開放公司 IP 的 SSH
+    #   - purpose 包含 "APP" 或 "Web" → 開放內部 API 埠
+    #   - purpose 包含 "DB" 或 "Database" → 只開放資料庫埠給 App
+    # ─────────────────────────────────────────────
+    
+    # 動態產生 Security Groups (每個 Subnet 一個 SG)
+    security_groups: []
+    
+    # ⚠️ 如需自訂規則，請在下方 Task 手動建立
+    # 或使用 purpose 欄位在 Task 中動態判斷
+
+  tasks:
+    # ════════════════════════════════════════════════
+    # Task 1: 建立 VPC
+    # ════════════════════════════════════════════════
+    - name: Create VPC
+      amazon.aws.ec2_vpc_net:
+        region: "{{ aws_region }}"
+        name: "{{ project_name }}-VPC"
+        cidr_block: "{{ vpc_cidr }}"
+        tags:
+          Name: "{{ project_name }}-VPC"
+          Project: "{{ project_name }}"
+          ManagedBy: Ansible
+          CreatedDate: "{{ ansible_date_time.date }}"
+        state: present
+      register: vpc_result
+
+    - name: Save VPC ID
+      set_fact:
+        vpc_id: "{{ vpc_result.vpc.id }}"
+
+    # ════════════════════════════════════════════════
+    # Task 2: 建立 Internet Gateway (for Public Subnet)
+    # ════════════════════════════════════════════════
+    - name: Create Internet Gateway
+      amazon.aws.ec2_vpc_igw:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_id }}"
+        tags:
+          Name: "{{ project_name }}-IGW"
+          Project: "{{ project_name }}"
+          ManagedBy: Ansible
+        state: present
+      register: igw_result
+      when: subnets | selectattr('is_public', 'equalto', true) | list | length > 0
+
+    - name: Save IGW ID
+      set_fact:
+        igw_id: "{{ igw_result.gateway_id }}"
+      when: igw_result is defined and igw_result.gateway_id is defined
+
+    # ════════════════════════════════════════════════
+    # Task 3: 建立所有 Subnets (自動加上 AZ)
+    # ════════════════════════════════════════════════
+    - name: Create Subnets
+      amazon.aws.ec2_vpc_subnet:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_id }}"
+        cidr: "{{ item.cidr }}"
+        az: "{{ item.az | default(default_az) }}"  # 如果沒有 az，使用 default_az
+        map_public: "{{ item.is_public }}"
+        tags:
+          Name: "{{ project_name }}-{{ item.name }}-subnet"
+          Project: "{{ project_name }}"
+          Purpose: "{{ item.purpose }}"
+          Type: "{{ 'Public' if item.is_public else 'Private' }}"
+          CIDR: "{{ item.cidr }}"
+          ManagedBy: Ansible
+        state: present
+      loop: "{{ subnets }}"
+      register: subnet_results
+
+    # ════════════════════════════════════════════════
+    # Task 4: 建立 Public Route Table (for Public Subnets)
+    # ════════════════════════════════════════════════
+    - name: Get Public Subnet IDs
+      set_fact:
+        public_subnet_ids: "{{ subnet_results.results | 
+                               selectattr('subnet.map_public_ip_on_launch', 'equalto', true) | 
+                               map(attribute='subnet.id') | list }}"
+
+    - name: Create Public Route Table
+      amazon.aws.ec2_vpc_route_table:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_id }}"
+        tags:
+          Name: "{{ project_name }}-RT-Public"
+          Project: "{{ project_name }}"
+          Type: Public
+          ManagedBy: Ansible
+        subnets: "{{ public_subnet_ids }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw_id }}"
+        state: present
+      register: public_rt_result
+      when: 
+        - public_subnet_ids | length > 0
+        - igw_id is defined
+
+    # ════════════════════════════════════════════════
+    # Task 5: 建立 Private Route Table (for Private Subnets)
+    # ════════════════════════════════════════════════
+    - name: Get Private Subnet IDs
+      set_fact:
+        private_subnet_ids: "{{ subnet_results.results | 
+                                selectattr('subnet.map_public_ip_on_launch', 'equalto', false) | 
+                                map(attribute='subnet.id') | list }}"
+
+    - name: Create Private Route Table
+      amazon.aws.ec2_vpc_route_table:
+        region: "{{ aws_region }}"
+        vpc_id: "{{ vpc_id }}"
+        tags:
+          Name: "{{ project_name }}-RT-Private"
+          Project: "{{ project_name }}"
+          Type: Private
+          ManagedBy: Ansible
+        subnets: "{{ private_subnet_ids }}"
+        routes: []  # Private subnet 沒有對外路由 (除非加 NAT Gateway)
+        state: present
+      register: private_rt_result
+      when: private_subnet_ids | length > 0
+
+    # ════════════════════════════════════════════════
+    # Task 6: 動態建立 Security Groups (每個 Subnet 一個)
+    # ════════════════════════════════════════════════
+    - name: Create Security Groups for each subnet
+      amazon.aws.ec2_security_group:
+        region: "{{ aws_region }}"
+        name: "{{ project_name }}-{{ item.name }}-sg"
+        description: "Security Group for {{ item.name }} subnet - {{ item.purpose }}"
+        vpc_id: "{{ vpc_id }}"
+        tags:
+          Name: "{{ project_name }}-{{ item.name }}-sg"
+          Project: "{{ project_name }}"
+          Subnet: "{{ item.name }}"
+          Purpose: "{{ item.purpose }}"
+          ManagedBy: Ansible
+        
+        # 基本規則: 所有 Subnet 都允許從 Bastion SSH (如果有 bastion subnet)
+        rules: >-
+          {{
+            ([{
+              'proto': 'tcp',
+              'from_port': 22,
+              'to_port': 22,
+              'cidr_ip': (subnets | selectattr('name', 'search', '[Bb]astion|[Dd][Mm][Zz]') | map(attribute='cidr') | first | default(office_ip)),
+              'rule_desc': 'SSH from bastion or office'
+            }] if not (item.purpose | lower is search('bastion|dmz')) else [{
+              'proto': 'tcp',
+              'from_port': 22,
+              'to_port': 22,
+              'cidr_ip': office_ip,
+              'rule_desc': 'SSH from office IP only'
+            }])
+            +
+            ([{
+              'proto': 'tcp',
+              'from_port': 8080,
+              'to_port': 8080,
+              'cidr_ip': vpc_cidr,
+              'rule_desc': 'Internal API access'
+            }] if (item.purpose | lower is search('app|api|web')) else [])
+            +
+            ([{
+              'proto': 'tcp',
+              'from_port': 3306,
+              'to_port': 3306,
+              'cidr_ip': vpc_cidr,
+              'rule_desc': 'MySQL from VPC'
+            },
+            {
+              'proto': 'tcp',
+              'from_port': 5432,
+              'to_port': 5432,
+              'cidr_ip': vpc_cidr,
+              'rule_desc': 'PostgreSQL from VPC'
+            }] if (item.purpose | lower is search('db|database|資料庫')) else [])
+            +
+            ([{
+              'proto': 'tcp',
+              'from_port': 6379,
+              'to_port': 6379,
+              'cidr_ip': vpc_cidr,
+              'rule_desc': 'Redis from VPC'
+            }] if (item.purpose | lower is search('cache|redis')) else [])
+          }}
+        
+        # Outbound 規則
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Allow all outbound"
+        
+        state: present
+      loop: "{{ subnets }}"
+      register: sg_results
+
+    # ════════════════════════════════════════════════
+    # Task 7: 儲存基礎設施資訊到檔案 (供 Step 2 使用)
+    # ════════════════════════════════════════════════
+    - name: Save infrastructure information to file
+      copy:
+        content: |
+          # ════════════════════════════════════════════════════════════════
+          # {{ project_name }} 基礎設施資訊
+          # 建立時間: {{ ansible_date_time.iso8601 }}
+          # ════════════════════════════════════════════════════════════════
+          
+          vpc_id: {{ vpc_id }}
+          vpc_cidr: {{ vpc_cidr }}
+          region: {{ aws_region }}
+          project_name: {{ project_name }}
+          {% if igw_id is defined %}
+          igw_id: {{ igw_id }}
+          {% endif %}
+          
+          # ─────────────────────────────────────────────
+          # Subnets 資訊
+          # ─────────────────────────────────────────────
+          subnets:
+          {% for result in subnet_results.results %}
+            - name: {{ result.subnet.tags.Name }}
+              subnet_id: {{ result.subnet.id }}
+              cidr: {{ result.subnet.cidr_block }}
+              az: {{ result.subnet.availability_zone }}
+              type: {{ result.subnet.tags.Type }}
+              purpose: {{ result.subnet.tags.Purpose }}
+              is_public: {{ result.subnet.map_public_ip_on_launch }}
+          {% endfor %}
+          
+          # ─────────────────────────────────────────────
+          # Security Groups 資訊
+          # ─────────────────────────────────────────────
+          security_groups:
+          {% for result in sg_results.results %}
+            - name: {{ result.group_name }}
+              sg_id: {{ result.group_id }}
+              subnet: {{ result.tags.Subnet }}
+              description: {{ result.description }}
+          {% endfor %}
+          
+          # ─────────────────────────────────────────────
+          # Route Tables 資訊
+          # ─────────────────────────────────────────────
+          route_tables:
+          {% if public_rt_result is defined and public_rt_result.route_table is defined %}
+            - name: {{ project_name }}-RT-Public
+              rt_id: {{ public_rt_result.route_table.id }}
+              type: Public
+              subnets: {{ public_subnet_ids }}
+          {% endif %}
+          {% if private_rt_result is defined and private_rt_result.route_table is defined %}
+            - name: {{ project_name }}-RT-Private
+              rt_id: {{ private_rt_result.route_table.id }}
+              type: Private
+              subnets: {{ private_subnet_ids }}
+          {% endif %}
+          
+          # ════════════════════════════════════════════════════════════════
+          # 使用說明
+          # ════════════════════════════════════════════════════════════════
+          # 此檔案包含所有基礎設施的 ID 資訊
+          # 請在 Step 2 建立 EC2 時使用對應的 subnet_id 和 sg_id
+          # 
+          # 網路架構:
+          {% for subnet in subnets %}
+          #   - {{ subnet.name }}: {{ subnet.cidr }} ({{ 'Public' if subnet.is_public else 'Private' }}) - {{ subnet.purpose }}
+          {% endfor %}
+          # ════════════════════════════════════════════════════════════════
+        dest: "./{{ project_name }}_infrastructure.yml"
+
+    # ════════════════════════════════════════════════
+    # Task 8: 顯示摘要資訊
+    # ════════════════════════════════════════════════
+    - name: Display Summary
+      debug:
+        msg:
+          - "══════════════════════════════════════════════════════════"
+          - "  ✅ VPC 建立完成"
+          - "══════════════════════════════════════════════════════════"
+          - "VPC ID: {{ vpc_id }}"
+          - "VPC CIDR: {{ vpc_cidr }}"
+          - "Region: {{ aws_region }}"
+          - ""
+          - "══════════════════════════════════════════════════════════"
+          - "  ✅ Subnets ({{ subnet_results.results | length }} 個)"
+          - "══════════════════════════════════════════════════════════"
+          - "{% for result in subnet_results.results %}{{ result.subnet.tags.Name }}: {{ result.subnet.id }} ({{ result.subnet.cidr_block }}) - {{ result.subnet.tags.Type }}\n{% endfor %}"
+          - "══════════════════════════════════════════════════════════"
+          - "  ✅ Security Groups ({{ sg_results.results | length }} 個)"
+          - "══════════════════════════════════════════════════════════"
+          - "{% for result in sg_results.results %}{{ result.group_name }}: {{ result.group_id }}\n{% endfor %}"
+          - "══════════════════════════════════════════════════════════"
+          - "  📄 基礎設施資訊已儲存"
+          - "══════════════════════════════════════════════════════════"
+          - "檔案: {{ project_name }}_infrastructure.yml"
+          - ""
+          - "🎯 下一步: 使用 step2_create_ec2_dynamic.yml 建立 EC2"
+          - "══════════════════════════════════════════════════════════"
