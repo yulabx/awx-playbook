@@ -139,13 +139,17 @@
         private_key_content: "{{ keypair_result.key.private_key | default('') }}"
         is_new_key: "{{ keypair_result.key.private_key is defined }}"
 
-    - name: Store private key (Secrets Manager)
+    - name: Store private key to Secrets Manager
       community.aws.aws_secret:
-        name: "{{ project_name }}/ssh-keypair"
-        description: "SSH keypair for {{ project_name }}"
-        secret: "{{ private_key_content }}"
         region: "{{ aws_region }}"
+        name: "{{ project_name }}/ssh-keypair"
         state: present
+        secret_type: 'string'
+        secret: "{{ private_key_content }}"
+        description: "SSH private key for {{ project_name }}"
+        tags:
+          Project: "{{ project_name }}"
+          ManagedBy: "Ansible"
       when: is_new_key | bool
       ignore_errors: yes
 
