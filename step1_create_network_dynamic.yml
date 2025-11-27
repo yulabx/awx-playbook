@@ -6,7 +6,6 @@
   gather_facts: true
   collections:
     - amazon.aws
-    - community.aws
 
   vars:
     aws_region: ap-northeast-1
