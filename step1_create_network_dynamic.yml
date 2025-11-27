@@ -1,64 +1,67 @@
 ---
 # ════════════════════════════════════════════════════════════════
-# Step 1: 建立 VPC / Subnets / Security Groups / Route Tables
+# Step 1: 建立 VPC / Subnets / Security Groups / Route Tables / SSH Key
 # ════════════════════════════════════════════════════════════════
 
-- name: Step 1 - Create VPC, Subnets and Security Groups
+- name: Step 1 - Create VPC, Subnets, Security Groups
   hosts: localhost
   gather_facts: true
+  collections:
+    - amazon.aws
+    - community.aws
 
   vars:
     aws_region: ap-northeast-1
     default_az: "{{ aws_region }}a"
+    office_ip: "203.0.113.10/32"   # 修改成公司實際 IP
 
-    office_ip: "203.0.113.10/32"  # 修改成公司實際 IP
-
-    # subnets / project_name / vpc_cidr 由外部 AWX Survey 傳入
+    # Step1 用到的三個 AWX Survey 變數：
+    # project_name
+    # vpc_cidr
+    # subnets[]
 
   tasks:
 
     # ════════════════════════════════════════════════
-    # Task 1: 建立 VPC
+    # Task 1: Create VPC
     # ════════════════════════════════════════════════
     - name: Create VPC
       amazon.aws.ec2_vpc_net:
         region: "{{ aws_region }}"
         name: "{{ project_name }}-VPC"
         cidr_block: "{{ vpc_cidr }}"
+        state: present
         tags:
           Name: "{{ project_name }}-VPC"
           Project: "{{ project_name }}"
           ManagedBy: Ansible
-          CreatedDate: "{{ ansible_date_time.date }}"
-        state: present
       register: vpc_result
 
-    - name: Save VPC ID
+    - name: Set VPC ID
       set_fact:
         vpc_id: "{{ vpc_result.vpc.id }}"
 
     # ════════════════════════════════════════════════
-    # Task 2: 建立 Internet Gateway（如果有 Public Subnet）
+    # Task 2: Create Internet Gateway (only if public subnets exist)
     # ════════════════════════════════════════════════
     - name: Create Internet Gateway
       amazon.aws.ec2_vpc_igw:
         region: "{{ aws_region }}"
         vpc_id: "{{ vpc_id }}"
+        state: present
         tags:
           Name: "{{ project_name }}-IGW"
           Project: "{{ project_name }}"
-          ManagedBy: Ansible
-        state: present
-      when: subnets | selectattr('is_public', 'equalto', true) | list | length > 0
+      when: subnets | selectattr('is_public','equalto',true) | list | length > 0
       register: igw_result
 
-    - name: Save IGW ID
+    - name: Set IGW ID
       set_fact:
         igw_id: "{{ igw_result.gateway_id }}"
-      when: igw_result is defined and igw_result.gateway_id is defined
+      when: igw_result.gateway_id is defined
 
     # ════════════════════════════════════════════════
-    # Task 3: 建立 Subnets
+    # Task 3: Create Subnets
     # ════════════════════════════════════════════════
     - name: Create Subnets
       amazon.aws.ec2_vpc_subnet:
@@ -67,120 +70,97 @@
         cidr: "{{ item.cidr }}"
         az: "{{ item.az | default(default_az) }}"
         map_public: "{{ item.is_public }}"
+        state: present
         tags:
           Name: "{{ project_name }}-{{ item.name }}-subnet"
           Project: "{{ project_name }}"
+          Subnet: "{{ item.name }}"
           Purpose: "{{ item.purpose }}"
           Type: "{{ 'Public' if item.is_public else 'Private' }}"
-          CIDR: "{{ item.cidr }}"
-          ManagedBy: Ansible
-        state: present
       loop: "{{ subnets }}"
       register: subnet_results
 
     # ════════════════════════════════════════════════
-    # Task 4: Public Route Table
+    # Task 4: Route Tables
     # ════════════════════════════════════════════════
-    - name: Get Public Subnet IDs
+    - name: Get public subnets
       set_fact:
         public_subnet_ids: "{{ subnet_results.results |
                                selectattr('subnet.map_public_ip_on_launch','equalto',true) |
                                map(attribute='subnet.id') | list }}"
 
-    - name: Create Public Route Table
+    - name: Create public route table
       amazon.aws.ec2_vpc_route_table:
         region: "{{ aws_region }}"
         vpc_id: "{{ vpc_id }}"
+        state: present
+        subnets: "{{ public_subnet_ids }}"
         tags:
           Name: "{{ project_name }}-RT-Public"
           Project: "{{ project_name }}"
-          Type: Public
-          ManagedBy: Ansible
-        subnets: "{{ public_subnet_ids }}"
         routes:
           - dest: 0.0.0.0/0
             gateway_id: "{{ igw_id }}"
-        state: present
       when:
         - public_subnet_ids | length > 0
         - igw_id is defined
-      register: public_rt_result
 
-    # ════════════════════════════════════════════════
-    # Task 5: Private Route Table
-    # ════════════════════════════════════════════════
-    - name: Get Private Subnet IDs
+    - name: Get private subnets
       set_fact:
         private_subnet_ids: "{{ subnet_results.results |
                                 selectattr('subnet.map_public_ip_on_launch','equalto',false) |
                                 map(attribute='subnet.id') | list }}"
 
-    - name: Create Private Route Table
+    - name: Create private route table
       amazon.aws.ec2_vpc_route_table:
         region: "{{ aws_region }}"
         vpc_id: "{{ vpc_id }}"
+        state: present
+        subnets: "{{ private_subnet_ids }}"
         tags:
           Name: "{{ project_name }}-RT-Private"
           Project: "{{ project_name }}"
-          Type: Private
-          ManagedBy: Ansible
-        subnets: "{{ private_subnet_ids }}"
-        routes: []   # Private subnet 默认无 NAT
-        state: present
+        routes: []
       when: private_subnet_ids | length > 0
-      register: private_rt_result
 
     # ════════════════════════════════════════════════
-    # Task 6: Security Groups（每個 Subnet 一個）
+    # Task 5: Security Groups（每個 Subnet 一個）
     # ════════════════════════════════════════════════
-    - name: Create Security Groups
+    - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
         region: "{{ aws_region }}"
         name: "{{ project_name }}-{{ item.name }}-sg"
         description: "Security Group for {{ item.name }} subnet"
         vpc_id: "{{ vpc_id }}"
+        state: present
         tags:
           Name: "{{ project_name }}-{{ item.name }}-sg"
           Project: "{{ project_name }}"
           Subnet: "{{ item.name }}"
-          Purpose: "{{ item.purpose }}"
-          ManagedBy: Ansible
-
+        
         rules: >-
           {{
-            ([{
-              'proto':'tcp','from_port':22,'to_port':22,
-              'cidr_ip': office_ip,
-              'rule_desc':'SSH from office'
-            }])
+            ([{ 'proto':'tcp','from_port':22,'to_port':22,'cidr_ip': office_ip }])
             +
-            ([{
-              'proto':'tcp','from_port':8080,'to_port':8080,
-              'cidr_ip': vpc_cidr,'rule_desc':'Internal API'
-            }] if (item.purpose | lower is search('app|api|web')) else [])
+            ([{ 'proto':'tcp','from_port':8080,'to_port':8080,'cidr_ip': vpc_cidr }]
+             if (item.purpose | lower is search('app|api|web')) else [])
             +
-            ([{
-              'proto':'tcp','from_port':3306,'to_port':3306,
-              'cidr_ip': vpc_cidr,'rule_desc':'MySQL'
-            },
-            {
-              'proto':'tcp','from_port':5432,'to_port':5432,
-              'cidr_ip': vpc_cidr,'rule_desc':'PostgreSQL'
-            }] if (item.purpose | lower is search('db|database')) else [])
+            ([{ 'proto':'tcp','from_port':3306,'to_port':3306,'cidr_ip': vpc_cidr },
+              { 'proto':'tcp','from_port':5432,'to_port':5432,'cidr_ip': vpc_cidr }]
+             if (item.purpose | lower is search('db|database')) else [])
           }}
 
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
 
-        state: present
       loop: "{{ subnets }}"
       register: sg_results
 
     # ════════════════════════════════════════════════
-    # Task 7: 建立 SSH Key Pair
+    # Task 6: Create SSH Key Pair
     # ════════════════════════════════════════════════
-    - name: Create SSH Key Pair
+    - name: Create key pair
       amazon.aws.ec2_key:
         region: "{{ aws_region }}"
         name: "{{ project_name }}-keypair"
@@ -189,53 +169,23 @@
 
     - name: Set key info
       set_fact:
-        key_name: "{{ project_name }}-keypair }}"
+        key_name: "{{ project_name }}-keypair"
         private_key_content: "{{ keypair_result.key.private_key | default('') }}"
         is_new_key: "{{ keypair_result.key.private_key is defined }}"
 
-    # ════════════════════════════════════════════════
-    # Task 8: 儲存 SSH 私鑰（Secrets Manager）
-    # ════════════════════════════════════════════════
-    - name: Store private key in Secrets Manager
+    # 儲存私鑰到 Secrets Manager
+    - name: Store private key (Secrets Manager)
       community.aws.aws_secret:
         region: "{{ aws_region }}"
         name: "{{ project_name }}/ssh-keypair"
-        description: "SSH keypair for {{ project_name }}"
-        secret_type: "string"
+        secret_type: string
         secret: "{{ private_key_content }}"
-        tags:
-          Project: "{{ project_name }}"
-          ManagedBy: "AWX"
+        description: "SSH keypair for {{ project_name }}"
       when: is_new_key | bool
-      register: secrets_result
+      ignore_errors: yes
 
     # ════════════════════════════════════════════════
-    # Task 9: 儲存基礎設施檔案
-    # ════════════════════════════════════════════════
-    - name: Save info file
-      copy:
-        content: |
-          project_name: {{ project_name }}
-          vpc_id: {{ vpc_id }}
-          vpc_cidr: {{ vpc_cidr }}
-
-          subnets:
-          {% for s in subnet_results.results %}
-            - name: {{ s.subnet.tags.Name }}
-              id: {{ s.subnet.id }}
-              cidr: {{ s.subnet.cidr_block }}
-              type: {{ s.subnet.tags.Type }}
-          {% endfor %}
-
-          security_groups:
-          {% for sg in sg_results.results %}
-            - name: {{ sg.group_name }}
-              id: {{ sg.group_id }}
-          {% endfor %}
-        dest: "./{{ project_name }}_infrastructure.yml"
-
-    # ════════════════════════════════════════════════
-    # Task 10: Summary
+    # Task 7: Summary
     # ════════════════════════════════════════════════
     - name: Summary
       debug:
@@ -244,28 +194,4 @@
           - "Subnets: {{ subnets | length }}"
           - "Security Groups: {{ sg_results.results | length }}"
           - "SSH Key: {{ key_name }}"
-          - "Infrastructure file saved"
-
-    # ════════════════════════════════════════════════
-    # Task 11: 私鑰說明（若新建立）
-    # ════════════════════════════════════════════════
-    - name: New SSH key instructions
-      debug:
-        msg:
-          - "🔐 新 SSH 私鑰已儲存於 Secrets Manager"
-          - "Secret ID: {{ project_name }}/ssh-keypair"
-          - ""
-          - "下載方式："
-          - "aws secretsmanager get-secret-value --region {{ aws_region }} --secret-id '{{ project_name }}/ssh-keypair' --query 'SecretString' --output text > {{ key_name }}.pem"
-      when: is_new_key | bool
-
-    # ════════════════════════════════════════════════
-    # Task 12: 私鑰已存在
-    # ════════════════════════════════════════════════
-    - name: Existing SSH key notice
-      debug:
-        msg:
-          - "ℹ️ SSH Key '{{ key_name }}' 已存在"
-          - "如需下載："
-          - "aws secretsmanager get-secret-value --region {{ aws_region }} --secret-id '{{ project_name }}/ssh-keypair'"
-      when: not (is_new_key | bool)
+          - "SecretsManager: {{ project_name }}/ssh-keypair (if new)"
