@@ -13,7 +13,7 @@
 
 - name: Step 1 - Create VPC, Subnets and Security Groups
   hosts: localhost
-  gather_facts: false
+  gather_facts: true
   
   vars:
     # ─────────────────────────────────────────────
