@@ -20,107 +20,111 @@
     # ─────────────────────────────────────────────
     aws_region: ap-northeast-1
     
-    # ⚠️ 載入 Step 1 產生的基礎設施資訊
-    infrastructure_file: ProjectX-prod_infrastructure.yml
+    # ─────────────────────────────────────────────
+    # 從前端/AWX 傳入的參數 (與 Step 1 相同)
+    # ─────────────────────────────────────────────
+    # project_name: "ProjectX-prod"           # 專案名稱 (與 Step 1 相同)
     
     # ─────────────────────────────────────────────
-    # EC2 部署參數 (使用者申請單填寫)
+    # EC2 部署參數 (從前端/AWX 傳入)
     # ─────────────────────────────────────────────
-    ec2_instances:
-      # 實例 1: Bastion Server (跳板機)
-      - name: bastion-01
-        subnet_name: bastion              # 部署在 bastion subnet
-        instance_type: t3.micro           # 跳板機用小規格即可
-        ami_id: ami-0d52744d6551d851e     # Amazon Linux 2023 (ap-northeast-1)
-        key_name: my-keypair              # ⚠️ 改成你的 SSH Key
-        private_ip: 10.100.1.10           # 固定 IP (在 bastion subnet 內)
-        assign_public_ip: true            # Bastion 需要 Public IP
-        volume_size: 20
-        tags:
-          Role: Bastion
-          Environment: Production
-      
-      # 實例 2-3: Application Servers
-      - name: app-01
-        subnet_name: app
-        instance_type: t3.medium          # 應用伺服器用中等規格
-        ami_id: ami-0d52744d6551d851e
-        key_name: my-keypair
-        private_ip: 10.100.10.10
-        assign_public_ip: false           # App 不需要 Public IP
-        volume_size: 50
-        tags:
-          Role: Application
-          Service: API
-          Environment: Production
-      
-      - name: app-02
-        subnet_name: app
-        instance_type: t3.medium
-        ami_id: ami-0d52744d6551d851e
-        key_name: my-keypair
-        private_ip: 10.100.10.11
-        assign_public_ip: false
-        volume_size: 50
-        tags:
-          Role: Application
-          Service: API
-          Environment: Production
-      
-      # 實例 4: Database Server
-      - name: db-01
-        subnet_name: db
-        instance_type: t3.large           # 資料庫用較大規格
-        ami_id: ami-0d52744d6551d851e
-        key_name: my-keypair
-        private_ip: 10.100.20.10
-        assign_public_ip: false           # DB 絕對不要 Public IP
-        volume_size: 100
-        tags:
-          Role: Database
-          Engine: MySQL
-          Environment: Production
+    # ec2_instances:
+    #   - name: bastion-01
+    #     subnet_name: "bastion"              # Subnet 名稱 (對應 Step 1 的 subnets[].name)
+    #     instance_type: t3.micro
+    #     ami_id: ami-0d52744d6551d851e
+    #     key_name: my-keypair
+    #     private_ip: 10.100.1.10
+    #     assign_public_ip: true
+    #     volume_size: 20
+    #     tags:
+    #       Role: Bastion
+    #       Environment: Production
 
   tasks:
     # ════════════════════════════════════════════════
-    # Task 1: 載入基礎設施資訊
+    # Task 1: 根據命名規則查詢 VPC ID
     # ════════════════════════════════════════════════
-    - name: Load infrastructure information
-      include_vars:
-        file: "{{ infrastructure_file }}"
-        name: infra
-
-    - name: Validate infrastructure data
+    - name: Get VPC by name
+      amazon.aws.ec2_vpc_net_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ project_name }}-VPC"
+      register: vpc_info
+    
+    - name: Validate VPC exists
       fail:
-        msg: "基礎設施檔案載入失敗，請確認 {{ infrastructure_file }} 存在"
-      when: infra.vpc_id is not defined
-
-    - name: Display loaded infrastructure info
+        msg: "找不到 VPC: {{ project_name }}-VPC，請先執行 Step 1"
+      when: vpc_info.vpcs | length == 0
+    
+    - name: Set VPC ID
+      set_fact:
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+    
+    # ════════════════════════════════════════════════
+    # Task 2: 根據命名規則查詢所有 Subnet ID
+    # ════════════════════════════════════════════════
+    - name: Get all subnets for this project
+      amazon.aws.ec2_vpc_subnet_info:
+        region: "{{ aws_region }}"
+        filters:
+          vpc-id: "{{ vpc_id }}"
+          "tag:Project": "{{ project_name }}"
+      register: subnets_info
+    
+    - name: Create subnet name to ID mapping
+      set_fact:
+        subnet_map: "{{ subnet_map | default({}) | combine({item.tags.Name: item.id}) }}"
+      loop: "{{ subnets_info.subnets }}"
+      vars:
+        # 從完整名稱提取 subnet name (ProjectX-prod-bastion-subnet → bastion)
+        subnet_name: "{{ item.tags.Name | regex_replace(project_name + '-(.+)-subnet', '\\1') }}"
+      loop_control:
+        loop_var: item
+    
+    # ════════════════════════════════════════════════
+    # Task 3: 根據命名規則查詢所有 Security Group ID
+    # ════════════════════════════════════════════════
+    - name: Get all security groups for this project
+      amazon.aws.ec2_security_group_info:
+        region: "{{ aws_region }}"
+        filters:
+          vpc-id: "{{ vpc_id }}"
+          "tag:Project": "{{ project_name }}"
+      register: sg_info
+    
+    - name: Create security group subnet to ID mapping
+      set_fact:
+        sg_map: "{{ sg_map | default({}) | combine({item.tags.Subnet: item.group_id}) }}"
+      loop: "{{ sg_info.security_groups }}"
+      when: item.tags.Subnet is defined
+    
+    - name: Display resource mappings
       debug:
         msg:
-          - "載入基礎設施資訊:"
-          - "  VPC ID: {{ infra.vpc_id }}"
-          - "  專案名稱: {{ infra.project_name }}"
-          - "  Subnets: {{ infra.subnets | length }} 個"
-          - "  Security Groups: {{ infra.security_groups | length }} 個"
-
+          - "VPC ID: {{ vpc_id }}"
+          - "Subnet 對應:"
+          - "{{ subnet_map }}"
+          - "Security Group 對應:"
+          - "{{ sg_map }}"
+    
     # ════════════════════════════════════════════════
-    # Task 2: 建立 EC2 實例
+    # Task 4: 建立 EC2 實例
     # ════════════════════════════════════════════════
     - name: Create EC2 instances
       amazon.aws.ec2_instance:
         region: "{{ aws_region }}"
-        name: "{{ infra.project_name }}-{{ item.name }}"
+        name: "{{ project_name }}-{{ item.name }}"
         instance_type: "{{ item.instance_type }}"
         image_id: "{{ item.ami_id }}"
         key_name: "{{ item.key_name }}"
         
-        # 從基礎設施資訊中找到對應的 Subnet ID
-        vpc_subnet_id: "{{ (infra.subnets | selectattr('name', 'search', item.subnet_name) | first).subnet_id }}"
+        # 根據 subnet_name 從 subnet_map 查找 ID
+        vpc_subnet_id: "{{ subnet_map[project_name + '-' + item.subnet_name + '-subnet'] }}"
         
-        # 從基礎設施資訊中找到對應的 Security Group ID
+        # 根據 subnet_name 從 sg_map 查找對應的 SG ID
         security_groups:
-          - "{{ (infra.security_groups | selectattr('subnet', 'equalto', item.subnet_name) | first).sg_id }}"
+          - "{{ sg_map[item.subnet_name] }}"
         
         # 網路設定
         network:
@@ -137,9 +141,9 @@
         
         # 標籤
         tags:
-          Name: "{{ infra.project_name }}-{{ item.name }}"
-          Project: "{{ infra.project_name }}"
-          Subnet: "{{ item.subnet_name }}"
+          Name: "{{ project_name }}-{{ item.name }}"
+          Project: "{{ project_name }}"
+          SubnetName: "{{ item.subnet_name }}"
           ManagedBy: Ansible
           CreatedDate: "{{ ansible_date_time.date }}"
           "{{ item.tags | default({}) }}"
@@ -150,103 +154,33 @@
       register: ec2_results
 
     # ════════════════════════════════════════════════
-    # Task 3: 儲存 EC2 資訊
+    # Task 5: 收集 EC2 資訊
     # ════════════════════════════════════════════════
-    - name: Save EC2 information to file
-      copy:
-        content: |
-          # ════════════════════════════════════════════════════════════════
-          # {{ infra.project_name }} EC2 實例資訊
-          # 建立時間: {{ ansible_date_time.iso8601 }}
-          # ════════════════════════════════════════════════════════════════
-          
-          project_name: {{ infra.project_name }}
-          vpc_id: {{ infra.vpc_id }}
-          region: {{ aws_region }}
-          
-          # ─────────────────────────────────────────────
-          # EC2 實例清單
-          # ─────────────────────────────────────────────
-          ec2_instances:
-          {% for result in ec2_results.results %}
-          {% set instance = result.instances[0] %}
-            - name: {{ instance.tags.Name }}
-              instance_id: {{ instance.instance_id }}
-              instance_type: {{ instance.instance_type }}
-              private_ip: {{ instance.private_ip_address }}
-              {% if instance.public_ip_address is defined %}
-              public_ip: {{ instance.public_ip_address }}
-              {% endif %}
-              subnet: {{ instance.tags.Subnet }}
-              subnet_id: {{ instance.subnet_id }}
-              az: {{ instance.placement.availability_zone }}
-              state: {{ instance.state.name }}
-              launch_time: {{ instance.launch_time }}
-              {% if instance.tags.Role is defined %}
-              role: {{ instance.tags.Role }}
-              {% endif %}
-          {% endfor %}
-          
-          # ════════════════════════════════════════════════════════════════
-          # 連線資訊
-          # ════════════════════════════════════════════════════════════════
-          # 
-          # 1. 連線到 Bastion (跳板機):
-          {% for result in ec2_results.results %}
-          {% set instance = result.instances[0] %}
-          {% if instance.tags.Subnet == 'bastion' %}
-          #    ssh -i /path/to/key.pem ec2-user@{{ instance.public_ip_address }}
-          {% endif %}
-          {% endfor %}
-          # 
-          # 2. 透過 Bastion 跳到內部伺服器:
-          {% for result in ec2_results.results %}
-          {% set instance = result.instances[0] %}
-          {% if instance.tags.Subnet != 'bastion' %}
-          #    ssh -J ec2-user@<bastion-ip> ec2-user@{{ instance.private_ip_address }}  # {{ instance.tags.Name }}
-          {% endif %}
-          {% endfor %}
-          # 
-          # 3. 或使用 SSH Config (~/.ssh/config):
-          #    Host bastion
-          #        HostName <bastion-public-ip>
-          #        User ec2-user
-          #        IdentityFile /path/to/key.pem
-          #    
-          #    Host app-*
-          #        User ec2-user
-          #        ProxyJump bastion
-          #        IdentityFile /path/to/key.pem
-          {% for result in ec2_results.results %}
-          {% set instance = result.instances[0] %}
-          {% if instance.tags.Subnet == 'app' %}
-          #    
-          #    Host {{ instance.tags.Name }}
-          #        HostName {{ instance.private_ip_address }}
-          {% endif %}
-          {% endfor %}
-          # 
-          # ════════════════════════════════════════════════════════════════
-        dest: "./{{ infra.project_name }}_ec2_instances.yml"
+    - name: Collect EC2 information
+      set_fact:
+        ec2_info:
+          project_name: "{{ project_name }}"
+          vpc_id: "{{ vpc_id }}"
+          region: "{{ aws_region }}"
+          instances: "{{ ec2_results.results | map(attribute='instances') | flatten | list }}"
 
     # ════════════════════════════════════════════════
-    # Task 4: 顯示建立結果
+    # Task 6: 顯示建立結果
     # ════════════════════════════════════════════════
     - name: Display EC2 Summary
       debug:
         msg:
           - "══════════════════════════════════════════════════════════"
-          - "  ✅ EC2 實例建立完成 ({{ ec2_results.results | length }} 台)"
+          - "  ✅ EC2 實例建立完成 ({{ ec2_info.instances | length }} 台)"
           - "══════════════════════════════════════════════════════════"
+          - "專案: {{ ec2_info.project_name }}"
+          - "VPC: {{ ec2_info.vpc_id }}"
+          - "Region: {{ ec2_info.region }}"
           - ""
-          - "{% for result in ec2_results.results %}{% set instance = result.instances[0] %}{{ instance.tags.Name }}:\n  Instance ID: {{ instance.instance_id }}\n  Private IP: {{ instance.private_ip_address }}\n  {% if instance.public_ip_address is defined %}Public IP: {{ instance.public_ip_address }}\n  {% endif %}Subnet: {{ instance.tags.Subnet }}\n  State: {{ instance.state.name }}\n\n{% endfor %}"
+          - "{% for instance in ec2_info.instances %}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{{ instance.tags.Name }}\n  Instance ID: {{ instance.instance_id }}\n  Instance Type: {{ instance.instance_type }}\n  Private IP: {{ instance.private_ip_address }}\n  {% if instance.public_ip_address is defined %}Public IP: {{ instance.public_ip_address }}\n  {% endif %}Subnet: {{ instance.tags.Subnet }}\n  AZ: {{ instance.placement.availability_zone }}\n  State: {{ instance.state.name }}\n  {% if instance.tags.Role is defined %}Role: {{ instance.tags.Role }}\n  {% endif %}\n{% endfor %}"
           - "══════════════════════════════════════════════════════════"
-          - "  📋 連線指令"
+          - "  📋 SSH 連線指令"
           - "══════════════════════════════════════════════════════════"
-          - "{% for result in ec2_results.results %}{% set instance = result.instances[0] %}{% if instance.tags.Subnet == 'bastion' %}Bastion: ssh -i key.pem ec2-user@{{ instance.public_ip_address }}\n{% endif %}{% endfor %}"
-          - "{% for result in ec2_results.results %}{% set instance = result.instances[0] %}{% if instance.tags.Subnet != 'bastion' %}{{ instance.tags.Name }}: ssh -J ec2-user@<bastion-ip> ec2-user@{{ instance.private_ip_address }}\n{% endif %}{% endfor %}"
-          - "══════════════════════════════════════════════════════════"
-          - "  📄 詳細資訊已儲存"
-          - "══════════════════════════════════════════════════════════"
-          - "檔案: {{ infra.project_name }}_ec2_instances.yml"
+          - "{% for instance in ec2_info.instances %}{% if instance.tags.Subnet == 'bastion' and instance.public_ip_address is defined %}ssh -i your-key.pem ec2-user@{{ instance.public_ip_address }}\n{% endif %}{% endfor %}"
+          - "{% for instance in ec2_info.instances %}{% if instance.tags.Subnet != 'bastion' %}ssh -J ec2-user@<bastion-ip> ec2-user@{{ instance.private_ip_address }}  # {{ instance.tags.Name }}\n{% endif %}{% endfor %}"
           - "══════════════════════════════════════════════════════════"
