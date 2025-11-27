@@ -20,6 +20,9 @@
     # ─────────────────────────────────────────────
     aws_region: ap-northeast-1
     
+    # 專案 Key Pair 命名規則 (自動使用專案專用金鑰)
+    default_key_name: "{{ project_name }}-keypair"
+    
     # ─────────────────────────────────────────────
     # 從前端/AWX 傳入的參數 (與 Step 1 相同)
     # ─────────────────────────────────────────────
@@ -33,7 +36,7 @@
     #     subnet_name: "bastion"              # Subnet 名稱 (對應 Step 1 的 subnets[].name)
     #     instance_type: t3.micro
     #     ami_id: ami-0d52744d6551d851e
-    #     key_name: my-keypair
+    #     key_name: ProjectX-keypair          # (選填) 若不填，自動使用 {project_name}-keypair
     #     private_ip: 10.100.1.10
     #     assign_public_ip: true
     #     volume_size: 20
@@ -117,7 +120,7 @@
         name: "{{ project_name }}-{{ item.name }}"
         instance_type: "{{ item.instance_type }}"
         image_id: "{{ item.ami_id }}"
-        key_name: "{{ item.key_name }}"
+        key_name: "{{ item.key_name | default(omit) }}"  # 如不提供，則不設定 Key (使用 Session Manager)
         
         # 根據 subnet_name 從 subnet_map 查找 ID
         vpc_subnet_id: "{{ subnet_map[project_name + '-' + item.subnet_name + '-subnet'] }}"
@@ -175,8 +178,26 @@
           - ""
           - "{% for instance in ec2_info.instances %}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{{ instance.tags.Name }}\n  Instance ID: {{ instance.instance_id }}\n  Instance Type: {{ instance.instance_type }}\n  Private IP: {{ instance.private_ip_address }}\n  {% if instance.public_ip_address is defined %}Public IP: {{ instance.public_ip_address }}\n  {% endif %}Subnet: {{ instance.tags.Subnet }}\n  AZ: {{ instance.placement.availability_zone }}\n  State: {{ instance.state.name }}\n  {% if instance.tags.Role is defined %}Role: {{ instance.tags.Role }}\n  {% endif %}\n{% endfor %}"
           - "══════════════════════════════════════════════════════════"
-          - "  📋 SSH 連線指令"
+          - "  📋 連線方式"
           - "══════════════════════════════════════════════════════════"
-          - "{% for instance in ec2_info.instances %}{% if instance.tags.Subnet == 'bastion' and instance.public_ip_address is defined %}ssh -i your-key.pem ec2-user@{{ instance.public_ip_address }}\n{% endif %}{% endfor %}"
-          - "{% for instance in ec2_info.instances %}{% if instance.tags.Subnet != 'bastion' %}ssh -J ec2-user@<bastion-ip> ec2-user@{{ instance.private_ip_address }}  # {{ instance.tags.Name }}\n{% endif %}{% endfor %}"
+          - ""
+          - "  方法 1: SSH Key (如果有設定 key_name)"
+          - "  ─────────────────────────────────────────────────────"
+          - "{% for instance in ec2_info.instances %}{% if instance.public_ip_address is defined %}  ssh -i your-key.pem ec2-user@{{ instance.public_ip_address }}  # {{ instance.tags.Name }}\n{% endif %}{% endfor %}"
+          - "{% for instance in ec2_info.instances %}{% if not instance.public_ip_address is defined %}  ssh -J ec2-user@<bastion-ip> ec2-user@{{ instance.private_ip_address }}  # {{ instance.tags.Name }} (透過 Bastion)\n{% endif %}{% endfor %}"
+          - ""
+          - "  方法 2: AWS Session Manager (推薦，無需 Key)"
+          - "  ─────────────────────────────────────────────────────"
+          - "{% for instance in ec2_info.instances %}  aws ssm start-session --target {{ instance.instance_id }} --region {{ ec2_info.region }}  # {{ instance.tags.Name }}\n{% endfor %}"
+          - ""
+          - "  Session Manager 優點："
+          - "  ✅ 不需要 SSH Key"
+          - "  ✅ 不需要開放 Port 22"
+          - "  ✅ 透過 IAM 權限控制"
+          - "  ✅ CloudTrail 完整稽核記錄"
+          - ""
+          - "  ⚠️  使用 Session Manager 需要："
+          - "  1. EC2 安裝 SSM Agent (Amazon Linux 2/AL2023 預設已安裝)"
+          - "  2. EC2 有 IAM Role: AmazonSSMManagedInstanceCore"
+          - "  3. 網路可連到 ssm.ap-northeast-1.amazonaws.com (或使用 VPC Endpoint)"
           - "══════════════════════════════════════════════════════════"
