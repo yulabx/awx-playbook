@@ -196,7 +196,7 @@
       amazon.aws.ec2_security_group:
         region: "{{ aws_region }}"
         name: "{{ project_name }}-{{ item.name }}-sg"
-        description: "Security Group for {{ item.name }} subnet - {{ item.purpose }}"
+        description: "Security Group for {{ item.name }} subnet"
         vpc_id: "{{ vpc_id }}"
         tags:
           Name: "{{ project_name }}-{{ item.name }}-sg"
@@ -366,3 +366,4 @@
           - ""
           - "🎯 下一步: 使用 step2_create_ec2_dynamic.yml 建立 EC2"
           - "══════════════════════════════════════════════════════════"
+
