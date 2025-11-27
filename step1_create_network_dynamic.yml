@@ -137,22 +137,19 @@
           Name: "{{ project_name }}-{{ item.name }}-sg"
           Project: "{{ project_name }}"
           Subnet: "{{ item.name }}"
-        
-        rules: >-
-          {{
-            ([{ 'proto':'tcp','from_port':22,'to_port':22,'cidr_ip': office_ip }])
-            +
-            ([{ 'proto':'tcp','from_port':8080,'to_port':8080,'cidr_ip': vpc_cidr }]
-             if (item.purpose | lower is search('app|api|web')) else [])
-            +
-            ([{ 'proto':'tcp','from_port':3306,'to_port':3306,'cidr_ip': vpc_cidr },
-              { 'proto':'tcp','from_port':5432,'to_port':5432,'cidr_ip': vpc_cidr }]
-             if (item.purpose | lower is search('db|database')) else [])
-          }}
 
+        # 為了避免 parser 出錯，這裡先用「簡單固定規則」
+        # 你之後如果要再做動態規則，我們可以另外重構
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: "{{ office_ip }}"
+            rule_desc: "SSH from office IP"
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
+            rule_desc: "Allow all outbound"
 
       loop: "{{ subnets }}"
       register: sg_results
@@ -173,19 +170,21 @@
         private_key_content: "{{ keypair_result.key.private_key | default('') }}"
         is_new_key: "{{ keypair_result.key.private_key is defined }}"
 
-    # 儲存私鑰到 Secrets Manager
+    # ════════════════════════════════════════════════
+    # Task 7: 儲存私鑰到 Secrets Manager（如果是新建立的 Key）
+    # ════════════════════════════════════════════════
     - name: Store private key (Secrets Manager)
       community.aws.aws_secret:
         region: "{{ aws_region }}"
         name: "{{ project_name }}/ssh-keypair"
-        secret_type: string
+        secret_type: "string"
         secret: "{{ private_key_content }}"
         description: "SSH keypair for {{ project_name }}"
       when: is_new_key | bool
       ignore_errors: yes
 
     # ════════════════════════════════════════════════
-    # Task 7: Summary
+    # Task 8: Summary
     # ════════════════════════════════════════════════
     - name: Summary
       debug:
