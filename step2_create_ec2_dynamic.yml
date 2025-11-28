@@ -36,7 +36,7 @@
     # ─────────────────────────────────────────────
     # ec2_instances:
     #   - name: bastion-01
-    #     subnet_name: "bastion"              # Subnet 名稱 (對應 Step 1 的 subnets[].name)
+    #     subnet_name: "ita-bastion-subnet"   # Subnet 名稱 (完整名稱,由 UI 串好)
     #     instance_type: t3.micro
     #     ami_id: ami-0d52744d6551d851e
     #     key_name: ProjectX-keypair          # (選填) 若不填，自動使用 {project_name}-keypair
@@ -99,11 +99,11 @@
           "tag:Project": "{{ project_name }}"
       register: sg_info
     
-    - name: Create security group subnet to ID mapping
+    - name: Create security group name to ID mapping
       set_fact:
-        sg_map: "{{ sg_map | default({}) | combine({item.tags.SubnetName: item.group_id}) }}"
+        sg_map: "{{ sg_map | default({}) | combine({item.tags.Name: item.group_id}) }}"
       loop: "{{ sg_info.security_groups }}"
-      when: item.tags.SubnetName is defined
+      when: item.tags.Name is defined
     
     - name: Display resource mappings
       debug:
@@ -125,12 +125,12 @@
         image_id: "{{ item.ami_id }}"
         key_name: "{{ item.key_name | default(default_key_name) }}"  # 自動使用專案 Key
         
-        # 根據 subnet_name 從 subnet_map 查找 ID
-        vpc_subnet_id: "{{ subnet_map[project_name + '-' + item.subnet_name + '-subnet'] }}"
+        # 直接用 subnet_name 從 subnet_map 查找 ID
+        vpc_subnet_id: "{{ subnet_map[item.subnet_name] }}"
         
-        # 根據 subnet_name 從 sg_map 查找對應的 SG ID
+        # 用 subnet_name 置換後綀組 sg_map 查找 SG ID
         security_groups:
-          - "{{ sg_map[item.subnet_name] }}"
+          - "{{ sg_map[item.subnet_name | regex_replace('-subnet$', '-sg')] }}"
         
         # 網路設定 (使用新的 network_interfaces 參數)
         network_interfaces:
