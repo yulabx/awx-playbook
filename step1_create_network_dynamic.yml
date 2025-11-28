@@ -26,11 +26,11 @@
     #   project.id: "ita"
     # vpc_cidr: "10.20.0.0/16"               # VPC CIDR
     # subnets:                               # Subnet 列表 (物件陣列)
-    #   - name: "bastion"                    # Subnet 名稱
+    #   - name: "ita-bastion-subnet"          # Subnet 名稱 (完整名稱,由 UI 串好)
     #     cidr: "10.20.1.0/28"               # CIDR
     #     is_public: true                    # 是否為 Public Subnet
     #     purpose: "bastion"                 # 用途
-    #   - name: "app"
+    #   - name: "ita-app-subnet"
     #     cidr: "10.20.10.0/24"
     #     is_public: false
     #     purpose: "application"
@@ -81,7 +81,7 @@
         map_public: "{{ item.is_public }}"
         state: present
         tags:
-          Name: "{{ project_name }}-{{ item.name }}-subnet"
+          Name: "{{ item.name }}"
           Project: "{{ project_name }}"
           SubnetName: "{{ item.name }}"
           Purpose: "{{ item.purpose }}"
@@ -135,12 +135,12 @@
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
         region: "{{ aws_region }}"
-        name: "{{ project_name }}-{{ item.name }}-sg"
-        description: "Security Group for {{ item.name }} subnet"
+        name: "{{ item.name | regex_replace('-subnet$', '-sg') }}"
+        description: "Security Group for {{ item.name }}"
         vpc_id: "{{ vpc_id }}"
         state: present
         tags:
-          Name: "{{ project_name }}-{{ item.name }}-sg"
+          Name: "{{ item.name | regex_replace('-subnet$', '-sg') }}"
           Project: "{{ project_name }}"
           SubnetName: "{{ item.name }}"
           Env: "{{ project_labels.env }}"
