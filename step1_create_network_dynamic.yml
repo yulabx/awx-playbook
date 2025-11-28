@@ -10,7 +10,12 @@
   vars:
     aws_region: ap-northeast-1
     default_az: "{{ aws_region }}a"
-    office_ip: "0.0.0.0/0"  # 暫時開放所有 IP (測試用)
+    
+    # ─────────────────────────────────────────────
+    # 外部 SSH 存取控制 (安全設定)
+    # ─────────────────────────────────────────────
+    enable_external_ssh: true           # 是否允許外部 SSH (true=測試, false=生產)
+    office_ip: "0.0.0.0/0"              # 允許 SSH 的來源 IP (空字串=不開放)
     
     # ─────────────────────────────────────────────
     # 從 AWX Survey / API 傳入的參數
@@ -139,11 +144,13 @@
           Project: "{{ project_name }}"
           SubnetName: "{{ item.name }}"
           Env: "{{ project_labels.env }}"
-        rules:
-          - proto: tcp
-            from_port: 22
-            to_port: 22
-            cidr_ip: "{{ office_ip }}"
+        rules: >
+          {%- set base_rules = [{'proto': 'all', 'cidr_ip': vpc_cidr}] -%}
+          {%- if enable_external_ssh and office_ip != '' -%}
+            {{ base_rules + [{'proto': 'tcp', 'from_port': 22, 'to_port': 22, 'cidr_ip': office_ip}] }}
+          {%- else -%}
+            {{ base_rules }}
+          {%- endif -%}
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
