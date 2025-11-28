@@ -101,9 +101,9 @@
     
     - name: Create security group subnet to ID mapping
       set_fact:
-        sg_map: "{{ sg_map | default({}) | combine({item.tags.Subnet: item.group_id}) }}"
+        sg_map: "{{ sg_map | default({}) | combine({item.tags.SubnetName: item.group_id}) }}"
       loop: "{{ sg_info.security_groups }}"
-      when: item.tags.Subnet is defined
+      when: item.tags.SubnetName is defined
     
     - name: Display resource mappings
       debug:
@@ -112,7 +112,7 @@
           - "Subnet 對應:"
           - "{{ subnet_map }}"
           - "Security Group 對應:"
-          - "{{ sg_map }}"
+          - "{{ sg_map | default({}) }}"
     
     # ════════════════════════════════════════════════
     # Task 4: 建立 EC2 實例
