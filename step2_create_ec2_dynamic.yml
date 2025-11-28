@@ -26,7 +26,10 @@
     # ─────────────────────────────────────────────
     # 從前端/AWX 傳入的參數 (與 Step 1 相同)
     # ─────────────────────────────────────────────
-    # project_name: "ProjectX-prod"           # 專案名稱 (與 Step 1 相同)
+    # project_name: "ita"                    # 專案名稱 (與 Step 1 相同)
+    # project_labels:                        # 專案標籤
+    #   env: "dev"
+    #   project.id: "ita"
     
     # ─────────────────────────────────────────────
     # EC2 部署參數 (從前端/AWX 傳入)
@@ -145,7 +148,7 @@
               delete_on_termination: true
         
         # 標籤
-        tags: "{{ {'Name': project_name + '-' + item.name, 'Project': project_name, 'SubnetName': item.subnet_name, 'ManagedBy': 'Ansible', 'CreatedDate': ansible_date_time.date} | combine(item.tags | default({})) }}"
+        tags: "{{ {'Name': project_name + '-' + item.name, 'Project': project_name, 'SubnetName': item.subnet_name, 'Env': project_labels.env, 'ProjectId': project_labels['project.id'], 'ManagedBy': 'Ansible', 'CreatedDate': ansible_date_time.date} | combine(item.tags | default({})) }}"
         
         state: running
         wait: yes
