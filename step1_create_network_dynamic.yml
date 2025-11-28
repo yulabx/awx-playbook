@@ -10,7 +10,25 @@
   vars:
     aws_region: ap-northeast-1
     default_az: "{{ aws_region }}a"
-    office_ip: "203.0.113.10/32"
+    office_ip: "0.0.0.0/0"  # 暫時開放所有 IP (測試用)
+    
+    # ─────────────────────────────────────────────
+    # 從 AWX Survey / API 傳入的參數
+    # ─────────────────────────────────────────────
+    # project_name: "ita"                    # 專案名稱
+    # project_labels:                        # 專案標籤
+    #   env: "dev"
+    #   project.id: "ita"
+    # vpc_cidr: "10.20.0.0/16"               # VPC CIDR
+    # subnets:                               # Subnet 列表 (物件陣列)
+    #   - name: "bastion"                    # Subnet 名稱
+    #     cidr: "10.20.1.0/28"               # CIDR
+    #     is_public: true                    # 是否為 Public Subnet
+    #     purpose: "bastion"                 # 用途
+    #   - name: "app"
+    #     cidr: "10.20.10.0/24"
+    #     is_public: false
+    #     purpose: "application"
 
   tasks:
 
@@ -23,6 +41,8 @@
         tags:
           Name: "{{ project_name }}-VPC"
           Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ProjectId: "{{ project_labels['project.id'] }}"
           ManagedBy: Ansible
       register: vpc_result
 
@@ -38,6 +58,7 @@
         tags:
           Name: "{{ project_name }}-IGW"
           Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when: subnets | selectattr('is_public','equalto',true) | list | length > 0
       register: igw_result
 
@@ -57,9 +78,10 @@
         tags:
           Name: "{{ project_name }}-{{ item.name }}-subnet"
           Project: "{{ project_name }}"
-          Subnet: "{{ item.name }}"
+          SubnetName: "{{ item.name }}"
           Purpose: "{{ item.purpose }}"
           Type: "{{ 'Public' if item.is_public else 'Private' }}"
+          Env: "{{ project_labels.env }}"
       loop: "{{ subnets }}"
       register: subnet_results
 
@@ -78,6 +100,7 @@
         tags:
           Name: "{{ project_name }}-RT-Public"
           Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
         routes:
           - dest: 0.0.0.0/0
             gateway_id: "{{ igw_id }}"
@@ -100,6 +123,7 @@
         tags:
           Name: "{{ project_name }}-RT-Private"
           Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
         routes: []
       when: private_subnet_ids | length > 0
 
@@ -113,7 +137,8 @@
         tags:
           Name: "{{ project_name }}-{{ item.name }}-sg"
           Project: "{{ project_name }}"
-          Subnet: "{{ item.name }}"
+          SubnetName: "{{ item.name }}"
+          Env: "{{ project_labels.env }}"
         rules:
           - proto: tcp
             from_port: 22
@@ -130,6 +155,10 @@
         region: "{{ aws_region }}"
         name: "{{ project_name }}-keypair"
         state: present
+        tags:
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
       register: keypair_result
 
     - name: Set key info
