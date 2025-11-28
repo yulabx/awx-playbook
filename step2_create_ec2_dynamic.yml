@@ -55,12 +55,12 @@
       amazon.aws.ec2_vpc_net_info:
         region: "{{ aws_region }}"
         filters:
-          "tag:Name": "{{ project_name }}-VPC"
+          "tag:Name": "{{ project_name }}-vpc"
       register: vpc_info
     
     - name: Validate VPC exists
       fail:
-        msg: "找不到 VPC: {{ project_name }}-VPC，請先執行 Step 1"
+        msg: "找不到 VPC: {{ project_name }}-vpc，請先執行 Step 1"
       when: vpc_info.vpcs | length == 0
     
     - name: Set VPC ID
