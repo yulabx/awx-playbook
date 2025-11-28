@@ -40,11 +40,11 @@
     - name: Create VPC
       amazon.aws.ec2_vpc_net:
         region: "{{ aws_region }}"
-        name: "{{ project_name }}-VPC"
+        name: "{{ project_name }}-vpc"
         cidr_block: "{{ vpc_cidr }}"
         state: present
         tags:
-          Name: "{{ project_name }}-VPC"
+          Name: "{{ project_name }}-vpc"
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
           ProjectId: "{{ project_labels['project.id'] }}"
@@ -61,7 +61,7 @@
         vpc_id: "{{ vpc_id }}"
         state: present
         tags:
-          Name: "{{ project_name }}-IGW"
+          Name: "{{ project_name }}-igw"
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
       when: subnets | selectattr('is_public','equalto',true) | list | length > 0
@@ -103,7 +103,7 @@
         state: present
         subnets: "{{ public_subnet_ids }}"
         tags:
-          Name: "{{ project_name }}-RT-Public"
+          Name: "{{ project_name }}-rt-public"
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
         routes:
@@ -126,7 +126,7 @@
         state: present
         subnets: "{{ private_subnet_ids }}"
         tags:
-          Name: "{{ project_name }}-RT-Private"
+          Name: "{{ project_name }}-rt-private"
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
         routes: []
