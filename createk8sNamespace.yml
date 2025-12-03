@@ -125,7 +125,7 @@
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
-            name: "{{ default_pvc_name }}"
+            name: "{{ ns_name }}-default-pvc"
             namespace: "{{ ns_name }}"
           spec:
             accessModes:
