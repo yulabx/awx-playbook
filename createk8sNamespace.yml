@@ -34,7 +34,7 @@
     annotations: {}
 
 
-  # 確保 pre_tasks 區塊與 vars 區塊層級相同 (沒有縮排)
+  # 確保 pre_tasks 區塊與 vars 區塊層級相同 (頂層，沒有縮排)
   pre_tasks:
     # 確保任務名稱 (name) 縮排兩個空格
     - name: Pre_1. Calculate Resource Quota Requests and Define Final Objects
@@ -61,7 +61,7 @@
         limit_range_name: "{{ ns_name }}-limits"
 
 
-  # 確保 tasks 區塊與 vars 區塊層級相同 (沒有縮排)
+  # 確保 tasks 區塊與 vars 區塊層級相同 (頂層，沒有縮排)
   tasks:
     - name: 0. Show final calculated configuration
       ansible.builtin.debug:
