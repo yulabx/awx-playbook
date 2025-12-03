@@ -30,7 +30,7 @@
     
     # 計算 Memory Requests: (去掉單位 Gi/Mi 後計算 * 0.8) 取整後加上單位
     # 例: 20Gi * 0.8 = 16Gi
-    calculated_memory_request: "{{ (total_memory_limit | regex_replace('Gi', '') | float * request_ratio) | int | string + 'Gi' }}"
+    calculated_cpu_request: "{{ ((total_cpu_limit | int * request_ratio) | round | int) | string }}"
 
     # 組合 ResourceQuota Hard 參數 (將計算結果放入最終的 K8s 物件定義)
     resource_quota_hard:
