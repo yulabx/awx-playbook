@@ -11,11 +11,11 @@
   # I. 變數區塊：只保留輸入和靜態配置
   # =======================================================
   vars:
-    # --- 核心輸入 (外部 JSON 提供) ---
-    ns_name: "demo"
-    total_cpu_limit: "10"
-    total_memory_limit: "20Gi"
-    total_storage_limit: "1TB"
+    # --- 核心輸入 (外部 JSON 提供，已修改為 namespace) ---
+    namespace: "demo" # 替換自 ns_name
+    namespace_cpu_limit: "8"  
+    namespace_memory_limit: "8Gi" 
+    namespace_storage_limit: "500Gi" 
     
     # --- 靜態配置/預設值 ---
     create_resource_quota: true
@@ -24,7 +24,7 @@
     default_storage_class: "microk8s-hostpath" 
     create_limit_range: false
     create_default_deny_network_policy: false
-    labels: {}
+    namespace_labels: {} 
     annotations: {}
 
 
@@ -36,54 +36,58 @@
     - name: 0.0 Set Requests = Limits Variables
       ansible.builtin.set_fact:
         # Requests 直接等於 Limits 的輸入值
-        calculated_cpu_request: "{{ total_cpu_limit }}"
-        calculated_memory_request: "{{ total_memory_limit }}"
+        calculated_cpu_request: "{{ namespace_cpu_limit }}"
+        calculated_memory_request: "{{ namespace_memory_limit }}"
         
         # 組合 ResourceQuota Hard 參數
         resource_quota_hard:
-          limits.cpu: "{{ total_cpu_limit }}"
-          requests.cpu: "{{ total_cpu_limit }}"  # Requests = Limits
-          limits.memory: "{{ total_memory_limit }}"
-          requests.memory: "{{ total_memory_limit }}" # Requests = Limits
-          requests.storage: "{{ total_storage_limit }}"
+          limits.cpu: "{{ namespace_cpu_limit }}"
+          requests.cpu: "{{ namespace_cpu_limit }}"  # Requests = Limits
+          limits.memory: "{{ namespace_memory_limit }}"
+          requests.memory: "{{ namespace_memory_limit }}" # Requests = Limits
+          requests.storage: "{{ namespace_storage_limit }}"
           persistentvolumeclaims: 50
           
-        # 組合 K8s 物件名稱
-        default_pvc_name: "{{ ns_name }}-default-pvc"
-        resource_quota_name: "{{ ns_name }}-quota"
-        limit_range_name: "{{ ns_name }}-limits"
+        # 組合 K8s 物件名稱 (使用新的 namespace 變數)
+        default_pvc_name: "{{ namespace }}-default-pvc"
+        resource_quota_name: "{{ namespace }}-quota"
+        limit_range_name: "{{ namespace }}-limits"
         
     - name: 0.1 Show final configuration (Requests = Limits)
       ansible.builtin.debug:
         msg: |
-          Project Namespace: {{ ns_name }}
-          - CPU Limits/Requests: {{ total_cpu_limit }}/{{ calculated_cpu_request }} (Requests = Limits)
-          - Memory Limits/Requests: {{ total_memory_limit }}/{{ calculated_memory_request }} (Requests = Limits)
-          - Storage Limit: {{ total_storage_limit }}
+          Project Namespace: {{ namespace }}
+          - CPU Limits/Requests: {{ namespace_cpu_limit }}/{{ calculated_cpu_request }} (Requests = Limits)
+          - Memory Limits/Requests: {{ namespace_memory_limit }}/{{ calculated_memory_request }} (Requests = Limits)
+          - Storage Limit: {{ namespace_storage_limit }}
           
     # 1. Create/Ensure Namespace
     - name: 1. Create/Ensure Namespace
       kubernetes.core.k8s:
+        # 繞過 SSL 驗證
+        validate_certs: no 
         state: present
         definition:
           apiVersion: v1
           kind: Namespace
           metadata:
-            name: "{{ ns_name }}"
-            labels: "{{ labels | default({}) }}"
+            name: "{{ namespace }}"
+            labels: "{{ namespace_labels | default({}) }}" 
             annotations: "{{ annotations | default({}) }}"
 
     # 2. Create/Update ResourceQuota
     - name: 2. Create/Update ResourceQuota
       when: create_resource_quota | bool
       kubernetes.core.k8s:
+        # 繞過 SSL 驗證
+        validate_certs: no 
         state: present
         definition:
           apiVersion: v1
           kind: ResourceQuota
           metadata:
             name: "{{ resource_quota_name }}"
-            namespace: "{{ ns_name }}"
+            namespace: "{{ namespace }}"
           spec:
             hard: "{{ resource_quota_hard }}"
 
@@ -91,13 +95,15 @@
     - name: 3. Create/Update LimitRange
       when: create_limit_range | bool
       kubernetes.core.k8s:
+        # 繞過 SSL 驗證
+        validate_certs: no 
         state: present
         definition:
           apiVersion: v1
           kind: LimitRange
           metadata:
             name: "{{ limit_range_name }}"
-            namespace: "{{ ns_name }}"
+            namespace: "{{ namespace }}"
           spec:
             limits:
               - type: Container
@@ -110,13 +116,15 @@
     - name: 4. Create default PVC ({{ default_pvc_name }})
       when: create_default_pvc | bool
       kubernetes.core.k8s:
+        # 繞過 SSL 驗證
+        validate_certs: no 
         state: present
         definition:
           apiVersion: v1
           kind: PersistentVolumeClaim
           metadata:
             name: "{{ default_pvc_name }}"
-            namespace: "{{ ns_name }}"
+            namespace: "{{ namespace }}"
           spec:
             accessModes:
               - ReadWriteOnce
@@ -129,13 +137,15 @@
     - name: 5. Create default deny all ingress/egress NetworkPolicy
       when: create_default_deny_network_policy | bool
       kubernetes.core.k8s:
+        # 繞過 SSL 驗證
+        validate_certs: no 
         state: present
         definition:
           apiVersion: networking.k8s.io/v1
           kind: NetworkPolicy
           metadata:
-            name: "{{ ns_name }}-default-deny"
-            namespace: "{{ ns_name }}"
+            name: "{{ namespace }}-default-deny"
+            namespace: "{{ namespace }}"
           spec:
             podSelector: {}
             policyTypes: [Ingress, Egress]
@@ -143,4 +153,4 @@
     # ---- 最終總結 ----
     - name: Print Final Result Summary
       ansible.builtin.debug:
-        msg: "✅ Namespace '{{ ns_name }}' setup complete (Requests = Limits)."
+        msg: "✅ Namespace '{{ namespace }}' setup complete (Requests = Limits)."
