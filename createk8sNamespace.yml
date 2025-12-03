@@ -1,5 +1,6 @@
 ---
-- name: 🚀 Kubernetes Project Setup (AWX Final & Corrected Version)
+# 此 Playbook 適用於 AWX/Tower 環境，自動使用 K8s 服務帳戶連線。
+- name: 🚀 Kubernetes Project Setup (Final, Simplified, and Corrected)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -7,40 +8,36 @@
   collections:
     - kubernetes.core
 
+  # =======================================================
+  # I. 變數區塊：只保留靜態輸入和預設值
+  # =======================================================
   vars:
-    # ------------------------------------
-    # I. 用戶輸入變數 (應由 AWX Extra Variables 提供)
-    # ------------------------------------
+    # --- 核心輸入 (應由 AWX Extra Variables 提供) ---
     ns_name: "demo"
     total_cpu_limit: "10"
     total_memory_limit: "20Gi"
     total_storage_limit: "1TB"
     
-    # PVC 專屬設定
+    # --- PVC 和其他預設值 ---
+    request_ratio: 0.8          
+    create_resource_quota: true
     create_default_pvc: true
     default_pvc_size: "50Gi"
     default_storage_class: "microk8s-hostpath" 
-
-    # ------------------------------------
-    # II. 靜態配置/預設值
-    # ------------------------------------
-    request_ratio: 0.8          # Requests 比例：預設 80%
-    create_resource_quota: true
     create_limit_range: false
     create_default_deny_network_policy: false
-    
-    # Metadata (可由外部 JSON 覆寫)
     labels: {}
     annotations: {}
 
 
-  # 確保 pre_tasks 區塊與 vars 區塊層級相同 (頂層，沒有縮排)
+  # =======================================================
+  # II. 前置任務：計算並定義所有 K8s 物件的最終參數 (解決 undefined 錯誤)
+  # =======================================================
   pre_tasks:
-    # 確保任務名稱 (name) 縮排兩個空格
+    # 確保 pre_tasks 和其下任務的縮排是正確的 (兩個空格/四個空格)
     - name: Pre_1. Calculate Resource Quota Requests and Define Final Objects
-      # 確保 set_fact 縮排四個空格
       ansible.builtin.set_fact:
-        # 1. 計算 CPU Requests (已修正，確保是整數)
+        # 1. 計算 CPU Requests (已修正 float 輸出問題)
         calculated_cpu_request: "{{ ((total_cpu_limit | int * request_ratio) | round | int) | string }}"
         
         # 2. 計算 Memory Requests
@@ -61,7 +58,9 @@
         limit_range_name: "{{ ns_name }}-limits"
 
 
-  # 確保 tasks 區塊與 vars 區塊層級相同 (頂層，沒有縮排)
+  # =======================================================
+  # III. 主要任務：建立 K8s 物件
+  # =======================================================
   tasks:
     - name: 0. Show final calculated configuration
       ansible.builtin.debug:
@@ -72,9 +71,7 @@
           - Storage Limit: {{ total_storage_limit }}
           - PVC Name & Size: {{ default_pvc_name }} ({{ default_pvc_size }})
 
-    # =========================
     # 1. Create/Ensure Namespace
-    # =========================
     - name: 1. Create/Ensure Namespace
       kubernetes.core.k8s:
         state: present
@@ -86,9 +83,7 @@
             labels: "{{ labels | default({}) }}"
             annotations: "{{ annotations | default({}) }}"
 
-    # =========================
     # 2. Create/Update ResourceQuota
-    # =========================
     - name: 2. Create/Update ResourceQuota
       when: create_resource_quota | bool
       kubernetes.core.k8s:
@@ -102,9 +97,7 @@
           spec:
             hard: "{{ resource_quota_hard }}"
 
-    # =========================
     # 3. Create/Update LimitRange
-    # =========================
     - name: 3. Create/Update LimitRange
       when: create_limit_range | bool
       kubernetes.core.k8s:
@@ -123,9 +116,7 @@
                 max: {cpu: "2", memory: "2Gi"}
                 min: {cpu: "50m", memory: "64Mi"}
 
-    # =========================
     # 4. Create PersistentVolumeClaim
-    # =========================
     - name: 4. Create default PVC ({{ default_pvc_name }})
       when: create_default_pvc | bool
       kubernetes.core.k8s:
@@ -144,9 +135,7 @@
                 storage: "{{ default_pvc_size }}"
             storageClassName: "{{ default_storage_class if default_storage_class | length > 0 else omit }}"
 
-    # =========================
     # 5. Create Default Deny NetworkPolicy
-    # =========================
     - name: 5. Create default deny all ingress/egress NetworkPolicy
       when: create_default_deny_network_policy | bool
       kubernetes.core.k8s:
