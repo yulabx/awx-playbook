@@ -44,7 +44,7 @@
     # ------------------------------------
     # PVC Configuration
     # ------------------------------------
-    create_default_pvc: true
+    create_default_pvc: false
     default_pvc_size: "50Gi"
     default_storage_class: "microk8s-hostpath" 
     default_pvc_name: "{{ ns_name }}-default-pvc" # PVC 名稱自動命名
