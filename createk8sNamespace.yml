@@ -1,6 +1,5 @@
 ---
-# 此 Playbook 適用於 AWX/Tower 環境，自動使用 K8s 服務帳戶連線。
-- name: 🚀 Kubernetes Project Setup (Final, Simplified, and Corrected)
+- name: 🚀 Kubernetes Project Setup (Final Structure Check)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -9,16 +8,16 @@
     - kubernetes.core
 
   # =======================================================
-  # I. 變數區塊：只保留靜態輸入和預設值
+  # I. 變數區塊
   # =======================================================
   vars:
-    # --- 核心輸入 (應由 AWX Extra Variables 提供) ---
+    # --- 核心輸入 (外部 JSON 提供) ---
     ns_name: "demo"
     total_cpu_limit: "10"
     total_memory_limit: "20Gi"
     total_storage_limit: "1TB"
     
-    # --- PVC 和其他預設值 ---
+    # --- 靜態配置/預設值 ---
     request_ratio: 0.8          
     create_resource_quota: true
     create_default_pvc: true
@@ -31,13 +30,12 @@
 
 
   # =======================================================
-  # II. 前置任務：計算並定義所有 K8s 物件的最終參數 (解決 undefined 錯誤)
+  # II. 前置任務：計算並定義所有 K8s 物件的最終參數
   # =======================================================
   pre_tasks:
-    # 確保 pre_tasks 和其下任務的縮排是正確的 (兩個空格/四個空格)
     - name: Pre_1. Calculate Resource Quota Requests and Define Final Objects
       ansible.builtin.set_fact:
-        # 1. 計算 CPU Requests (已修正 float 輸出問題)
+        # 1. 計算 CPU Requests
         calculated_cpu_request: "{{ ((total_cpu_limit | int * request_ratio) | round | int) | string }}"
         
         # 2. 計算 Memory Requests
