@@ -1,5 +1,5 @@
 ---
-- name: 🚀 Kubernetes Project Setup (AWX Credential Optimized + PVC)
+- name: 🚀 Kubernetes Project Setup (AWX Optimized with Auto-Calculation)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -9,58 +9,62 @@
 
   vars:
     # ------------------------------------
-    # Namespace Configuration
+    # 簡化 ResourceQuota 輸入 (用戶只需填 Limits)
+    # 這些變數應由 AWX Job Template 的 Extra Variables 提供
     # ------------------------------------
-    ns_name: "demo"
+    ns_name: "demo"              # 命名空間名稱
+    total_cpu_limit: "10"        # 總 CPU 硬上限 (例如 "10")
+    total_memory_limit: "20Gi"   # 總 Memory 硬上限 (例如 "20Gi")
+    total_storage_limit: "1TB"   # 總 Storage 總量上限 (例如 "1TB")
+
+    # ------------------------------------
+    # 內部計算邏輯 (Requests = 80% Limits)
+    # ------------------------------------
+    request_ratio: 0.8           # Requests 比例：預設 80%
+    resource_quota_name: "{{ ns_name }}-quota"
+    create_resource_quota: true
+
+    # 計算 CPU Requests: (總限制 * 0.8) 四捨五入取整
+    # 例: 10 * 0.8 = 8
+    calculated_cpu_request: "{{ (total_cpu_limit | int * request_ratio) | round | string }}"
+    
+    # 計算 Memory Requests: (去掉單位 Gi/Mi 後計算 * 0.8) 取整後加上單位
+    # 例: 20Gi * 0.8 = 16Gi
+    calculated_memory_request: "{{ (total_memory_limit | regex_replace('Gi', '') | float * request_ratio) | int | string + 'Gi' }}"
+
+    # 組合 ResourceQuota Hard 參數 (將計算結果放入最終的 K8s 物件定義)
+    resource_quota_hard:
+      limits.cpu: "{{ total_cpu_limit }}"
+      requests.cpu: "{{ calculated_cpu_request }}"
+      limits.memory: "{{ total_memory_limit }}"
+      requests.memory: "{{ calculated_memory_request }}"
+      requests.storage: "{{ total_storage_limit }}"
+      persistentvolumeclaims: 50 # 預設 PVC 數量上限
+      
+    # ------------------------------------
+    # PVC Configuration
+    # ------------------------------------
+    create_default_pvc: true
+    default_pvc_size: "50Gi"
+    default_storage_class: "microk8s-hostpath" 
+    default_pvc_name: "{{ ns_name }}-default-pvc" # PVC 名稱自動命名
+
+    # ------------------------------------
+    # 其他可選設定
+    # ------------------------------------
+    create_limit_range: false
+    create_default_deny_network_policy: false
     labels: {}
     annotations: {}
 
-    # ------------------------------------
-    # 可選: ResourceQuota (包含 Storage 總量限制)
-    # ------------------------------------
-    create_resource_quota: false
-    resource_quota_name: "rq-default"
-    resource_quota_hard: {}  # 例：{"requests.storage":"500Gi"}
-
-    # ------------------------------------
-    # 可選: LimitRange (單個容器的資源限制)
-    # ------------------------------------
-    create_limit_range: false
-    limit_range_name: "limits-default"
-    limit_range_container_defaults:
-      default:
-        cpu: "500m"
-        memory: "512Mi"
-      defaultRequest:
-        cpu: "100m"
-        memory: "128Mi"
-      max:
-        cpu: "2"
-        memory: "2Gi"
-      min:
-        cpu: "50m"
-        memory: "64Mi"
-
-    # ------------------------------------
-    # 新增: PersistentVolumeClaim (預設儲存空間)
-    # ------------------------------------
-    create_default_pvc: false
-    default_pvc_name: "pvc-default-storage"
-    default_pvc_size: "10Gi"
-    default_storage_class: "microk8s-hostpath" # 請根據您的 MicroK8s 配置調整
-
-    # ------------------------------------
-    # 可選: Default Deny NetworkPolicy
-    # ------------------------------------
-    create_default_deny_network_policy: false
-    default_deny_network_policy_name: "np-default-deny"
-
   tasks:
-    - name: Assert required params
-      ansible.builtin.assert:
-        that:
-          - ns_name | length > 0
-        fail_msg: "參數缺失：請檢查 ns_name 變數。"
+    - name: 0. Show calculated Resource Quota values
+      ansible.builtin.debug:
+        msg: |
+          Project Setup for Namespace: {{ ns_name }}
+          - CPU Limits: {{ total_cpu_limit }} / Requests: {{ calculated_cpu_request }}
+          - Memory Limits: {{ total_memory_limit }} / Requests: {{ calculated_memory_request }}
+          - PVC Name: {{ default_pvc_name }} ({{ default_pvc_size }})
 
     # =========================
     # 1. Create/Ensure Namespace
@@ -78,7 +82,7 @@
       register: ns_result
 
     # =========================
-    # 2. Optional: ResourceQuota
+    # 2. Create/Update ResourceQuota (使用計算後的 resource_quota_hard)
     # =========================
     - name: 2. Create/Update ResourceQuota
       when: create_resource_quota | bool
@@ -113,9 +117,9 @@
                 defaultRequest: "{{ limit_range_container_defaults.defaultRequest }}"
                 max: "{{ limit_range_container_defaults.max }}"
                 min: "{{ limit_range_container_defaults.min }}"
-
+                
     # =========================
-    # 4. 新增: PersistentVolumeClaim (PVC)
+    # 4. Create PersistentVolumeClaim (使用自動命名)
     # =========================
     - name: 4. Create default PVC for the namespace
       when: create_default_pvc | bool
@@ -136,11 +140,6 @@
             storageClassName: "{{ default_storage_class if default_storage_class | length > 0 else omit }}"
       register: pvc_result
 
-    - name: Report default PVC creation status
-      when: create_default_pvc | bool
-      ansible.builtin.debug:
-        msg: "Default PVC '{{ default_pvc_name }}' ({{ default_pvc_size }}) ensured. Changed: {{ pvc_result.changed }}"
-
     # =========================
     # 5. Optional: Default Deny NetworkPolicy
     # =========================
@@ -158,12 +157,10 @@
             podSelector: {}
             policyTypes: [Ingress, Egress]
 
-    # ---- 回傳結果 ----
+    # ---- 回傳最終結果 ----
     - name: Print Final Result Summary
       ansible.builtin.debug:
         msg: |
-          Project Setup Completed for Namespace: {{ ns_name }}
-          - ResourceQuota Applied: {{ create_resource_quota | bool }}
-          - LimitRange Applied: {{ create_limit_range | bool }}
-          - Default PVC Created: {{ create_default_pvc | bool }}
-          - Default Deny Policy: {{ create_default_deny_network_policy | bool }}
+          ✅ Project Setup Completed for Namespace: {{ ns_name }}
+          - ResourceQuota Applied (Limits/Requests): {{ total_cpu_limit }}/{{ calculated_cpu_request }}
+          - Default PVC Created: {{ default_pvc_name }} ({{ default_pvc_size }})
