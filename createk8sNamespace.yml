@@ -1,5 +1,5 @@
 ---
-- name: Create Kubernetes Namespace (real)
+- name: 🚀 Kubernetes Project Setup (AWX Credential Optimized + PVC)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -8,34 +8,23 @@
     - kubernetes.core
 
   vars:
-    # ---- 認證模式：kubeconfig | token | certificate ----
-    auth_mode: "kubeconfig"
-
-    # 1) kubeconfig 模式
-    kubeconfig: "~/.kube/config"
-    kubecontext: ""
-
-    # 2) token 模式（提供 host + api_key）
-    host: ""
-    api_key: ""
-    verify_ssl: true
-
-    # 3) certificate 模式（提供 host + 三段 Base64；單層 Base64，與 microk8s config 相同）
-    ca_data: ""
-    client_certificate_data: ""
-    client_key_data: ""
-
-    # ---- Namespace 與附加設定 ----
+    # ------------------------------------
+    # Namespace Configuration
+    # ------------------------------------
     ns_name: "demo"
-    labels: {}        # 例：{"env": "dev", "team": "platform"}
-    annotations: {}   # 例：{"owner": "ops@company.com"}
+    labels: {}
+    annotations: {}
 
-    # ---- 可選: 建立 ResourceQuota ----
+    # ------------------------------------
+    # 可選: ResourceQuota (包含 Storage 總量限制)
+    # ------------------------------------
     create_resource_quota: false
     resource_quota_name: "rq-default"
-    resource_quota_hard: {}     # 例：{"pods":"50","requests.cpu":"2","requests.memory":"4Gi","limits.cpu":"4","limits.memory":"8Gi"}
+    resource_quota_hard: {}  # 例：{"requests.storage":"500Gi"}
 
-    # ---- 可選: 建立 LimitRange ----
+    # ------------------------------------
+    # 可選: LimitRange (單個容器的資源限制)
+    # ------------------------------------
     create_limit_range: false
     limit_range_name: "limits-default"
     limit_range_container_defaults:
@@ -52,122 +41,31 @@
         cpu: "50m"
         memory: "64Mi"
 
-    # ---- 可選: 預設拒絕 Ingress/Egress 的 NetworkPolicy ----
+    # ------------------------------------
+    # 新增: PersistentVolumeClaim (預設儲存空間)
+    # ------------------------------------
+    create_default_pvc: false
+    default_pvc_name: "pvc-default-storage"
+    default_pvc_size: "10Gi"
+    default_storage_class: "microk8s-hostpath" # 請根據您的 MicroK8s 配置調整
+
+    # ------------------------------------
+    # 可選: Default Deny NetworkPolicy
+    # ------------------------------------
     create_default_deny_network_policy: false
     default_deny_network_policy_name: "np-default-deny"
 
   tasks:
-    - name: Show effective variables (redacted)
-      ansible.builtin.debug:
-        msg:
-          auth_mode: "{{ auth_mode }}"
-          host: "{{ host }}"
-          verify_ssl: "{{ verify_ssl }}"
-          ns_name: "{{ ns_name }}"
-          labels: "{{ labels }}"
-          annotations: "{{ annotations }}"
-
-    # ---- 基本檢查 ----
     - name: Assert required params
       ansible.builtin.assert:
         that:
           - ns_name | length > 0
-          - auth_mode in ['kubeconfig','token','certificate']
-          - (auth_mode != 'kubeconfig') or (kubeconfig | length > 0)
-          - (auth_mode != 'token') or (host | length > 0 and api_key | length > 0)
-          - (auth_mode != 'certificate') or
-            (host | length > 0 and ca_data | length > 0 and client_certificate_data | length > 0 and client_key_data | length > 0)
-        fail_msg: "參數缺失或不合法：請檢查 ns_name / auth_mode 與對應憑證或連線參數。"
+        fail_msg: "參數缺失：請檢查 ns_name 變數。"
 
     # =========================
-    # Certificate 模式（建立暫存檔並清理）
+    # 1. Create/Ensure Namespace
     # =========================
-    - name: Handle certificate mode with cleanup
-      when: auth_mode == 'certificate'
-      block:
-        - name: Create temp files for certs
-          ansible.builtin.tempfile:
-            state: file
-            suffix: "{{ item }}"
-          loop:
-            - "-ca.crt"
-            - "-client.crt"
-            - "-client.key"
-          register: tmp_files
-
-        - name: Set temp paths
-          ansible.builtin.set_fact:
-            ca_file: "{{ tmp_files.results[0].path }}"
-            cert_file: "{{ tmp_files.results[1].path }}"
-            key_file: "{{ tmp_files.results[2].path }}"
-
-        # microk8s kubeconfig 是「單層 Base64」→ 只需 b64decode 一次
-        - name: Write CA cert
-          ansible.builtin.copy:
-            dest: "{{ ca_file }}"
-            content: "{{ ca_data | b64decode }}"
-            mode: "0600"
-
-        - name: Write client cert
-          ansible.builtin.copy:
-            dest: "{{ cert_file }}"
-            content: "{{ client_certificate_data | b64decode }}"
-            mode: "0600"
-
-        - name: Write client key
-          ansible.builtin.copy:
-            dest: "{{ key_file }}"
-            content: "{{ client_key_data | b64decode }}"
-            mode: "0600"
-
-        - name: (Debug) Verify PEM headers
-          ansible.builtin.shell: "head -n 1 {{ item }}"
-          loop:
-            - "{{ ca_file }}"
-            - "{{ cert_file }}"
-            - "{{ key_file }}"
-          register: pem_headers
-          changed_when: false
-
-        - name: (Debug) Show PEM headers
-          ansible.builtin.debug:
-            msg: "{{ pem_headers.results | map(attribute='stdout') | list }}"
-
-        - name: Create namespace (certificate)
-          kubernetes.core.k8s:
-            state: present
-            definition:
-              apiVersion: v1
-              kind: Namespace
-              metadata:
-                name: "{{ ns_name }}"
-                labels: "{{ labels | default({}) }}"
-                annotations: "{{ annotations | default({}) }}"
-            host: "{{ host }}"
-            ssl_ca_cert: "{{ ca_file }}"
-            cert_file: "{{ cert_file }}"
-            key_file: "{{ key_file }}"
-            validate_certs: "{{ verify_ssl }}"
-          register: ns_result_cert
-
-        - name: Report namespace (certificate)
-          ansible.builtin.debug:
-            msg: "Namespace '{{ ns_name }}' ensured (certificate). changed={{ ns_result_cert.changed }}"
-      always:
-        - name: Cleanup certificate temp files
-          ansible.builtin.file:
-            path: "{{ item }}"
-            state: absent
-          loop:
-            - "{{ ca_file | default('') }}"
-            - "{{ cert_file | default('') }}"
-            - "{{ key_file | default('') }}"
-
-    # =========================
-    # Token 模式
-    # =========================
-    - name: Create namespace (token)
-      when: auth_mode == 'token'
+    - name: 1. Create/Ensure Namespace
       kubernetes.core.k8s:
         state: present
         definition:
@@ -177,42 +75,12 @@
             name: "{{ ns_name }}"
             labels: "{{ labels | default({}) }}"
             annotations: "{{ annotations | default({}) }}"
-        host: "{{ host }}"
-        api_key: "{{ api_key }}"
-        validate_certs: "{{ verify_ssl }}"
-      register: ns_result_token
-
-    - name: Report namespace (token)
-      when: auth_mode == 'token'
-      ansible.builtin.debug:
-        msg: "Namespace '{{ ns_name }}' ensured (token). changed={{ ns_result_token.changed }}"
+      register: ns_result
 
     # =========================
-    # Kubeconfig 模式
+    # 2. Optional: ResourceQuota
     # =========================
-    - name: Create namespace (kubeconfig)
-      when: auth_mode == 'kubeconfig'
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Namespace
-          metadata:
-            name: "{{ ns_name }}"
-            labels: "{{ labels | default({}) }}"
-            annotations: "{{ annotations | default({}) }}"
-        kubeconfig: "{{ kubeconfig }}"
-        context: "{{ kubecontext if kubecontext | length > 0 else omit }}"
-        validate_certs: "{{ verify_ssl }}"
-      register: ns_result_kcfg
-
-    - name: Report namespace (kubeconfig)
-      when: auth_mode == 'kubeconfig'
-      ansible.builtin.debug:
-        msg: "Namespace '{{ ns_name }}' ensured (kubeconfig). changed={{ ns_result_kcfg.changed }}"
-
-    # ---- 可選: ResourceQuota ----
-    - name: Create/Update ResourceQuota
+    - name: 2. Create/Update ResourceQuota
       when: create_resource_quota | bool
       kubernetes.core.k8s:
         state: present
@@ -224,17 +92,11 @@
             namespace: "{{ ns_name }}"
           spec:
             hard: "{{ resource_quota_hard }}"
-        kubeconfig: "{{ kubeconfig if auth_mode == 'kubeconfig' else omit }}"
-        context: "{{ kubecontext if (auth_mode == 'kubeconfig' and kubecontext|length>0) else omit }}"
-        host: "{{ host if auth_mode == 'token' else omit }}"
-        api_key: "{{ api_key if auth_mode == 'token' else omit }}"
-        ssl_ca_cert: "{{ ca_file if auth_mode == 'certificate' else omit }}"
-        cert_file:   "{{ cert_file if auth_mode == 'certificate' else omit }}"
-        key_file:    "{{ key_file if auth_mode == 'certificate' else omit }}"
-        validate_certs: "{{ verify_ssl }}"
 
-    # ---- 可選: LimitRange ----
-    - name: Create/Update LimitRange
+    # =========================
+    # 3. Optional: LimitRange
+    # =========================
+    - name: 3. Create/Update LimitRange
       when: create_limit_range | bool
       kubernetes.core.k8s:
         state: present
@@ -251,17 +113,38 @@
                 defaultRequest: "{{ limit_range_container_defaults.defaultRequest }}"
                 max: "{{ limit_range_container_defaults.max }}"
                 min: "{{ limit_range_container_defaults.min }}"
-        kubeconfig: "{{ kubeconfig if auth_mode == 'kubeconfig' else omit }}"
-        context: "{{ kubecontext if (auth_mode == 'kubeconfig' and kubecontext|length>0) else omit }}"
-        host: "{{ host if auth_mode == 'token' else omit }}"
-        api_key: "{{ api_key if auth_mode == 'token' else omit }}"
-        ssl_ca_cert: "{{ ca_file if auth_mode == 'certificate' else omit }}"
-        cert_file:   "{{ cert_file if auth_mode == 'certificate' else omit }}"
-        key_file:    "{{ key_file if auth_mode == 'certificate' else omit }}"
-        validate_certs: "{{ verify_ssl }}"
 
-    # ---- 可選: Default Deny NetworkPolicy ----
-    - name: Create default deny all ingress/egress NetworkPolicy
+    # =========================
+    # 4. 新增: PersistentVolumeClaim (PVC)
+    # =========================
+    - name: 4. Create default PVC for the namespace
+      when: create_default_pvc | bool
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{ default_pvc_name }}"
+            namespace: "{{ ns_name }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: "{{ default_pvc_size }}"
+            storageClassName: "{{ default_storage_class if default_storage_class | length > 0 else omit }}"
+      register: pvc_result
+
+    - name: Report default PVC creation status
+      when: create_default_pvc | bool
+      ansible.builtin.debug:
+        msg: "Default PVC '{{ default_pvc_name }}' ({{ default_pvc_size }}) ensured. Changed: {{ pvc_result.changed }}"
+
+    # =========================
+    # 5. Optional: Default Deny NetworkPolicy
+    # =========================
+    - name: 5. Create default deny all ingress/egress NetworkPolicy
       when: create_default_deny_network_policy | bool
       kubernetes.core.k8s:
         state: present
@@ -274,26 +157,13 @@
           spec:
             podSelector: {}
             policyTypes: [Ingress, Egress]
-        kubeconfig: "{{ kubeconfig if auth_mode == 'kubeconfig' else omit }}"
-        context: "{{ kubecontext if (auth_mode == 'kubeconfig' and kubecontext|length>0) else omit }}"
-        host: "{{ host if auth_mode == 'token' else omit }}"
-        api_key: "{{ api_key if auth_mode == 'token' else omit }}"
-        ssl_ca_cert: "{{ ca_file if auth_mode == 'certificate' else omit }}"
-        cert_file:   "{{ cert_file if auth_mode == 'certificate' else omit }}"
-        key_file:    "{{ key_file if auth_mode == 'certificate' else omit }}"
-        validate_certs: "{{ verify_ssl }}"
 
     # ---- 回傳結果 ----
-    - name: Set result
-      ansible.builtin.set_fact:
-        result:
-          status: "completed"
-          success: true
-          namespace: "{{ ns_name }}"
-          with_resource_quota: "{{ create_resource_quota | bool }}"
-          with_limit_range: "{{ create_limit_range | bool }}"
-          with_default_deny_np: "{{ create_default_deny_network_policy | bool }}"
-
-    - name: Print result
+    - name: Print Final Result Summary
       ansible.builtin.debug:
-        var: result
+        msg: |
+          Project Setup Completed for Namespace: {{ ns_name }}
+          - ResourceQuota Applied: {{ create_resource_quota | bool }}
+          - LimitRange Applied: {{ create_limit_range | bool }}
+          - Default PVC Created: {{ create_default_pvc | bool }}
+          - Default Deny Policy: {{ create_default_deny_network_policy | bool }}
