@@ -1,5 +1,5 @@
 ---
-- name: 🚀 Kubernetes Project Setup (AWX Optimized, Auto-Calculation)
+- name: 🚀 Kubernetes Project Setup (AWX Final & Corrected Version)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -11,10 +11,10 @@
     # ------------------------------------
     # I. 用戶輸入變數 (應由 AWX Extra Variables 提供)
     # ------------------------------------
-    ns_name: "demo"               # 命名空間名稱
-    total_cpu_limit: "10"         # 總 CPU 硬上限 (例如 "10")
-    total_memory_limit: "20Gi"    # 總 Memory 硬上限 (例如 "20Gi")
-    total_storage_limit: "1TB"    # 命名空間 Storage 總量上限 (ResourceQuota)
+    ns_name: "demo"
+    total_cpu_limit: "10"
+    total_memory_limit: "20Gi"
+    total_storage_limit: "1TB"
     
     # PVC 專屬設定
     create_default_pvc: true
@@ -24,40 +24,44 @@
     # ------------------------------------
     # II. 靜態配置/預設值
     # ------------------------------------
-    request_ratio: 0.8            # Requests 比例：預設 80%
+    request_ratio: 0.8          # Requests 比例：預設 80%
     create_resource_quota: true
-    create_limit_range: false     # 可選：單容器限制
-    create_default_deny_network_policy: false # 可選：網路策略
+    create_limit_range: false
+    create_default_deny_network_policy: false
     
     # Metadata (可由外部 JSON 覆寫)
     labels: {}
     annotations: {}
 
 
+  # 確保 pre_tasks 區塊與 vars 區塊層級相同 (沒有縮排)
   pre_tasks:
+    # 確保任務名稱 (name) 縮排兩個空格
     - name: Pre_1. Calculate Resource Quota Requests and Define Final Objects
+      # 確保 set_fact 縮排四個空格
       ansible.builtin.set_fact:
-        # 1. 計算 CPU Requests (確保最終轉換為整數)
+        # 1. 計算 CPU Requests (已修正，確保是整數)
         calculated_cpu_request: "{{ ((total_cpu_limit | int * request_ratio) | round | int) | string }}"
         
-        # 2. 計算 Memory Requests (確保去除單位後計算並取整)
+        # 2. 計算 Memory Requests
         calculated_memory_request: "{{ (total_memory_limit | regex_replace('Gi', '') | float * request_ratio) | int | string + 'Gi' }}"
         
-        # 3. 組合 ResourceQuota Hard 參數 (給 K8s 模組使用)
+        # 3. 組合 ResourceQuota Hard 參數
         resource_quota_hard:
           limits.cpu: "{{ total_cpu_limit }}"
           requests.cpu: "{{ calculated_cpu_request }}"
           limits.memory: "{{ total_memory_limit }}"
           requests.memory: "{{ calculated_memory_request }}"
           requests.storage: "{{ total_storage_limit }}"
-          persistentvolumeclaims: 50 # PVC 數量上限
+          persistentvolumeclaims: 50
           
-        # 4. 組合 PVC 名稱
+        # 4. 組合 K8s 物件名稱
         default_pvc_name: "{{ ns_name }}-default-pvc"
         resource_quota_name: "{{ ns_name }}-quota"
         limit_range_name: "{{ ns_name }}-limits"
 
 
+  # 確保 tasks 區塊與 vars 區塊層級相同 (沒有縮排)
   tasks:
     - name: 0. Show final calculated configuration
       ansible.builtin.debug:
