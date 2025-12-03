@@ -1,5 +1,5 @@
 ---
-- name: 🚀 Kubernetes Project Setup (Final Structure Check)
+- name: 🚀 Kubernetes Project Setup (Final Stability Version)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -8,7 +8,7 @@
     - kubernetes.core
 
   # =======================================================
-  # I. 變數區塊
+  # I. 變數區塊：只保留輸入和靜態配置
   # =======================================================
   vars:
     # --- 核心輸入 (外部 JSON 提供) ---
@@ -30,10 +30,11 @@
 
 
   # =======================================================
-  # II. 前置任務：計算並定義所有 K8s 物件的最終參數
+  # II. 主要任務區塊 (包含計算邏輯)
   # =======================================================
-  pre_tasks:
-    - name: Pre_1. Calculate Resource Quota Requests and Define Final Objects
+  tasks:
+    # 0.0 任務：計算並定義所有 K8s 物件的最終參數 (替代 Pre_tasks)
+    - name: 0.0 Calculate and Define All Quota Variables
       ansible.builtin.set_fact:
         # 1. 計算 CPU Requests
         calculated_cpu_request: "{{ ((total_cpu_limit | int * request_ratio) | round | int) | string }}"
@@ -54,13 +55,8 @@
         default_pvc_name: "{{ ns_name }}-default-pvc"
         resource_quota_name: "{{ ns_name }}-quota"
         limit_range_name: "{{ ns_name }}-limits"
-
-
-  # =======================================================
-  # III. 主要任務：建立 K8s 物件
-  # =======================================================
-  tasks:
-    - name: 0. Show final calculated configuration
+        
+    - name: 0.1 Show final calculated configuration
       ansible.builtin.debug:
         msg: |
           Project Namespace: {{ ns_name }}
