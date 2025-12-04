@@ -19,7 +19,7 @@
     
     # --- 靜態配置/預設值 ---
     create_resource_quota: true
-    create_default_pvc: true
+    create_default_pvc: false
     default_pvc_size: "50Gi"
     default_storage_class: "microk8s-hostpath" 
     create_limit_range: false
