@@ -1,0 +1,111 @@
+---
+# ════════════════════════════════════════════════════════════════
+# AWS EC2 關機腳本
+# ════════════════════════════════════════════════════════════════
+# 使用場景: 停止指定的 EC2 實例
+# 
+# 參數說明:
+#   vpc_name: VPC 名稱 (用於識別和標記)
+#   ec2_instance_id: EC2 實例 ID (例: i-0123456789abcdef0)
+# ════════════════════════════════════════════════════════════════
+
+- name: Power Off AWS EC2 Instance
+  hosts: localhost
+  gather_facts: false
+  
+  vars:
+    # ─────────────────────────────────────────────
+    # 基本設定
+    # ─────────────────────────────────────────────
+    aws_region: ap-northeast-1
+    
+    # ─────────────────────────────────────────────
+    # 從前端/AWX 傳入的參數
+    # ─────────────────────────────────────────────
+    # vpc_name: "ita-vpc"                    # VPC 名稱
+    # ec2_instance_id: "i-0123456789abcdef0" # EC2 實例 ID
+
+  tasks:
+    # ─────────────────────────────────────────────
+    # Task 1: 驗證參數
+    # ─────────────────────────────────────────────
+    - name: Validate required parameters
+      fail:
+        msg: "Missing required parameter: {{ item }}"
+      when: vars[item] is not defined or vars[item] == ''
+      loop:
+        - vpc_name
+        - ec2_instance_id
+
+    # ─────────────────────────────────────────────
+    # Task 2: 獲取 EC2 實例資訊
+    # ─────────────────────────────────────────────
+    - name: Get EC2 instance information
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        instance_ids:
+          - "{{ ec2_instance_id }}"
+      register: ec2_info
+
+    # ─────────────────────────────────────────────
+    # Task 3: 檢查實例是否存在
+    # ─────────────────────────────────────────────
+    - name: Check if instance exists
+      fail:
+        msg: "EC2 instance {{ ec2_instance_id }} not found"
+      when: ec2_info.instances | length == 0
+
+    # ─────────────────────────────────────────────
+    # Task 4: 顯示當前實例狀態
+    # ─────────────────────────────────────────────
+    - name: Display current instance state
+      debug:
+        msg: "Current state of {{ ec2_instance_id }}: {{ ec2_info.instances[0].state.name }}"
+
+    # ─────────────────────────────────────────────
+    # Task 5: 停止 EC2 實例
+    # ─────────────────────────────────────────────
+    - name: Stop EC2 instance
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        instance_ids:
+          - "{{ ec2_instance_id }}"
+        state: stopped
+        wait: true
+        wait_timeout: 300
+      register: stop_result
+      when: ec2_info.instances[0].state.name != 'stopped'
+
+    # ─────────────────────────────────────────────
+    # Task 6: 顯示停止結果
+    # ─────────────────────────────────────────────
+    - name: Display stop result
+      debug:
+        msg: 
+          - "EC2 Instance {{ ec2_instance_id }} has been stopped successfully"
+          - "VPC: {{ vpc_name }}"
+          - "Region: {{ aws_region }}"
+      when: stop_result is changed
+
+    - name: Instance already stopped
+      debug:
+        msg: "EC2 Instance {{ ec2_instance_id }} is already in stopped state"
+      when: ec2_info.instances[0].state.name == 'stopped'
+
+    # ─────────────────────────────────────────────
+    # Task 7: 記錄操作日誌
+    # ─────────────────────────────────────────────
+    - name: Log power off operation
+      set_fact:
+        operation_summary:
+          action: "power_off"
+          vpc_name: "{{ vpc_name }}"
+          instance_id: "{{ ec2_instance_id }}"
+          region: "{{ aws_region }}"
+          previous_state: "{{ ec2_info.instances[0].state.name }}"
+          final_state: "stopped"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Display operation summary
+      debug:
+        var: operation_summary
