@@ -11,14 +11,14 @@
     # ─────────────────────────────────────────────
     # 從 AWX Survey / API 傳入的參數
     # ─────────────────────────────────────────────
-    # aws_region: "ap-northeast-1"           # AWS Region (選填，預設 ap-northeast-1)
+    # cluster_region: "ap-northeast-1"       # AWS Region (選填，預設 ap-northeast-1)
     
     # ─────────────────────────────────────────────
     # 預設值
     # ─────────────────────────────────────────────
-    default_aws_region: ap-northeast-1
-    aws_region: "{{ aws_region | default(default_aws_region) }}"
-    default_az: "{{ aws_region }}a"
+    default_cluster_region: ap-northeast-1
+    cluster_region: "{{ cluster_region | default(default_cluster_region) }}"
+    default_az: "{{ cluster_region }}a"
     
     # ─────────────────────────────────────────────
     # 外部 SSH 存取控制 (安全設定)
@@ -48,12 +48,12 @@
 
     - name: Create VPC
       amazon.aws.ec2_vpc_net:
-        region: "{{ aws_region }}"
-        name: "{{ project_name }}-vpc"
+        region: "{{ cluster_region }}"
+        name: "{{ project_name }}"
         cidr_block: "{{ vpc_cidr }}"
         state: present
         tags:
-          Name: "{{ project_name }}-vpc"
+          Name: "{{ project_name }}"
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
           ProjectId: "{{ project_labels['project.id'] }}"
@@ -66,7 +66,7 @@
 
     - name: Create Internet Gateway
       amazon.aws.ec2_vpc_igw:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         state: present
         tags:
@@ -83,7 +83,7 @@
 
     - name: Create Subnets
       amazon.aws.ec2_vpc_subnet:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         cidr: "{{ item.cidr }}"
         az: "{{ item.az | default(default_az) }}"
@@ -107,7 +107,7 @@
 
     - name: Create public route table
       amazon.aws.ec2_vpc_route_table:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         state: present
         subnets: "{{ public_subnet_ids }}"
@@ -130,7 +130,7 @@
 
     - name: Create private route table
       amazon.aws.ec2_vpc_route_table:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         state: present
         subnets: "{{ private_subnet_ids }}"
@@ -143,7 +143,7 @@
 
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         name: "{{ item.name | regex_replace('-subnet$', '-sg') }}"
         description: "Security Group for {{ item.name }}"
         vpc_id: "{{ vpc_id }}"
@@ -168,7 +168,7 @@
 
     - name: Create key pair
       amazon.aws.ec2_key:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         name: "{{ project_name }}-keypair"
         state: present
         tags:
@@ -190,7 +190,7 @@
           - "✅ VPC 建立完成"
           - "══════════════════════════════════════════════════════"
           - "VPC ID: {{ vpc_id }}"
-          - "Region: {{ aws_region }}"
+          - "Region: {{ cluster_region }}"
           - "Subnets: {{ subnets | length }} 個"
           - "Security Groups: {{ sg_results.results | length }} 個"
           - "SSH Key: {{ key_name }}"
