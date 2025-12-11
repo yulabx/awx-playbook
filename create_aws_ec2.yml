@@ -18,13 +18,13 @@
     # ─────────────────────────────────────────────
     # 從前端/AWX 傳入的參數 (與 Step 1 相同)
     # ─────────────────────────────────────────────
-    # aws_region: "ap-northeast-1"           # AWS Region (選填，預設 ap-northeast-1)
+    # cluster_region: "ap-northeast-1"       # AWS Region (選填，預設 ap-northeast-1)
     
     # ─────────────────────────────────────────────
     # 預設值
     # ─────────────────────────────────────────────
-    default_aws_region: ap-northeast-1
-    aws_region: "{{ aws_region | default(default_aws_region) }}"
+    default_cluster_region: ap-northeast-1
+    cluster_region: "{{ cluster_region | default(default_cluster_region) }}"
     
     # 專案 Key Pair 命名規則 (自動使用專案專用金鑰)
     default_key_name: "{{ project_name }}-keypair"
@@ -59,14 +59,14 @@
     # ════════════════════════════════════════════════
     - name: Get VPC by name
       amazon.aws.ec2_vpc_net_info:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         filters:
-          "tag:Name": "{{ project_name }}-vpc"
+          "tag:Name": "{{ project_name }}"
       register: vpc_info
     
     - name: Validate VPC exists
       fail:
-        msg: "找不到 VPC: {{ project_name }}-vpc，請先執行 Step 1"
+        msg: "找不到 VPC: {{ project_name }}，請先執行 Step 1"
       when: vpc_info.vpcs | length == 0
     
     - name: Set VPC ID
@@ -78,7 +78,7 @@
     # ════════════════════════════════════════════════
     - name: Get all subnets for this project
       amazon.aws.ec2_vpc_subnet_info:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         filters:
           vpc-id: "{{ vpc_id }}"
           "tag:Project": "{{ project_name }}"
@@ -99,7 +99,7 @@
     # ════════════════════════════════════════════════
     - name: Get all security groups for this project
       amazon.aws.ec2_security_group_info:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         filters:
           vpc-id: "{{ vpc_id }}"
           "tag:Project": "{{ project_name }}"
@@ -125,7 +125,7 @@
     # ════════════════════════════════════════════════
     - name: Create EC2 instances
       amazon.aws.ec2_instance:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         name: "{{ project_name }}-{{ item.name }}"
         instance_type: "{{ item.instance_type }}"
         image_id: "{{ item.ami_id }}"
@@ -169,7 +169,7 @@
         ec2_info:
           project_name: "{{ project_name }}"
           vpc_id: "{{ vpc_id }}"
-          region: "{{ aws_region }}"
+          region: "{{ cluster_region }}"
           instances: "{{ ec2_results.results | map(attribute='instances') | flatten | list }}"
 
     # ════════════════════════════════════════════════
