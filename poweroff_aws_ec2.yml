@@ -11,7 +11,7 @@
 
 - name: Power Off AWS EC2 Instance
   hosts: localhost
-  gather_facts: false
+  gather_facts: true
   
   vars:
     # ─────────────────────────────────────────────
@@ -115,3 +115,4 @@
     - name: Display operation summary
       debug:
         var: operation_summary
+
