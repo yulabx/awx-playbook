@@ -15,20 +15,26 @@
   
   vars:
     # ─────────────────────────────────────────────
-    # 基本設定
-    # ─────────────────────────────────────────────
-    aws_region: ap-northeast-1
-    
-    # ─────────────────────────────────────────────
     # 從前端/AWX 傳入的參數
     # ─────────────────────────────────────────────
     # vpc_name: "ita-vpc"                    # VPC 名稱
     # ec2_instance_id: "i-0123456789abcdef0" # EC2 實例 ID
+    # aws_region: "ap-northeast-1"           # AWS Region (選填，預設 ap-northeast-1)
+    
+    # ─────────────────────────────────────────────
+    # 預設值
+    # ─────────────────────────────────────────────
+    default_aws_region: ap-northeast-1
+    aws_region: "{{ aws_region | default(default_aws_region) }}"
 
   tasks:
     # ─────────────────────────────────────────────
     # Task 1: 驗證參數
     # ─────────────────────────────────────────────
+    - name: Set default region if not provided
+      set_fact:
+        aws_region: "{{ aws_region | default(default_aws_region) }}"
+    
     - name: Validate required parameters
       fail:
         msg: "Missing required parameter: {{ item }}"
