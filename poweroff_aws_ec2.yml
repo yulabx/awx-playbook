@@ -5,7 +5,7 @@
 # 使用場景: 停止指定的 EC2 實例
 # 
 # 參數說明:
-#   vpc_name: VPC 名稱 (用於識別和標記)
+#   project_name: 專案名稱 (用於識別和標記)
 #   ec2_instance_id: EC2 實例 ID (例: i-0123456789abcdef0)
 # ════════════════════════════════════════════════════════════════
 
@@ -17,15 +17,15 @@
     # ─────────────────────────────────────────────
     # 從前端/AWX 傳入的參數
     # ─────────────────────────────────────────────
-    # vpc_name: "ita-vpc"                    # VPC 名稱
+    # project_name: "ita"                    # 專案名稱
     # ec2_instance_id: "i-0123456789abcdef0" # EC2 實例 ID
-    # aws_region: "ap-northeast-1"           # AWS Region (選填，預設 ap-northeast-1)
+    # cluster_region: "ap-northeast-1"       # AWS Region (選填，預設 ap-northeast-1)
     
     # ─────────────────────────────────────────────
     # 預設值
     # ─────────────────────────────────────────────
-    default_aws_region: ap-northeast-1
-    aws_region: "{{ aws_region | default(default_aws_region) }}"
+    default_cluster_region: ap-northeast-1
+    cluster_region: "{{ cluster_region | default(default_cluster_region) }}"
 
   tasks:
     # ─────────────────────────────────────────────
@@ -33,14 +33,14 @@
     # ─────────────────────────────────────────────
     - name: Set default region if not provided
       set_fact:
-        aws_region: "{{ aws_region | default(default_aws_region) }}"
+        cluster_region: "{{ cluster_region | default(default_cluster_region) }}"
     
     - name: Validate required parameters
       fail:
         msg: "Missing required parameter: {{ item }}"
       when: vars[item] is not defined or vars[item] == ''
       loop:
-        - vpc_name
+        - project_name
         - ec2_instance_id
 
     # ─────────────────────────────────────────────
@@ -48,7 +48,7 @@
     # ─────────────────────────────────────────────
     - name: Get EC2 instance information
       amazon.aws.ec2_instance_info:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         instance_ids:
           - "{{ ec2_instance_id }}"
       register: ec2_info
@@ -73,7 +73,7 @@
     # ─────────────────────────────────────────────
     - name: Stop EC2 instance
       amazon.aws.ec2_instance:
-        region: "{{ aws_region }}"
+        region: "{{ cluster_region }}"
         instance_ids:
           - "{{ ec2_instance_id }}"
         state: stopped
@@ -89,8 +89,8 @@
       debug:
         msg: 
           - "EC2 Instance {{ ec2_instance_id }} has been stopped successfully"
-          - "VPC: {{ vpc_name }}"
-          - "Region: {{ aws_region }}"
+          - "Project: {{ project_name }}"
+          - "Region: {{ cluster_region }}"
       when: stop_result is changed
 
     - name: Instance already stopped
@@ -105,9 +105,9 @@
       set_fact:
         operation_summary:
           action: "power_off"
-          vpc_name: "{{ vpc_name }}"
+          project_name: "{{ project_name }}"
           instance_id: "{{ ec2_instance_id }}"
-          region: "{{ aws_region }}"
+          region: "{{ cluster_region }}"
           previous_state: "{{ ec2_info.instances[0].state.name }}"
           final_state: "stopped"
           timestamp: "{{ ansible_date_time.iso8601 }}"
