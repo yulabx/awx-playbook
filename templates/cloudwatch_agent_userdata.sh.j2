@@ -1,0 +1,88 @@
+#!/bin/bash
+# CloudWatch Agent 安裝與設定（支援 Amazon Linux 2/2023 x86_64/ARM64 與 Ubuntu x86_64）
+
+# 偵測 OS 與架構
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+  OS=$ID
+  ARCH=$(uname -m)
+else
+  OS=$(uname -s)
+  ARCH=$(uname -m)
+fi
+
+# 安裝 wget（如未安裝）
+if ! command -v wget >/dev/null 2>&1; then
+  if [ "$OS" = "amzn" ] || [ "$OS" = "amazon" ]; then
+    yum install -y wget || dnf install -y wget
+  elif [ "$OS" = "ubuntu" ]; then
+    apt-get update -y && apt-get install -y wget
+  fi
+fi
+
+# 下載並安裝 CloudWatch Agent
+if [ "$OS" = "amzn" ] || [ "$OS" = "amazon" ]; then
+  if [ "$ARCH" = "aarch64" ]; then
+    AGENT_URL="https://amazoncloudwatch-agent.s3.amazonaws.com/amazon_linux/arm64/latest/amazon-cloudwatch-agent.rpm"
+  else
+    AGENT_URL="https://amazoncloudwatch-agent.s3.amazonaws.com/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm"
+  fi
+  cd /tmp
+  wget "$AGENT_URL"
+  rpm -Uvh amazon-cloudwatch-agent.rpm
+elif [ "$OS" = "ubuntu" ]; then
+  cd /tmp
+  wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+  dpkg -i amazon-cloudwatch-agent.deb
+fi
+
+# 建立 CloudWatch Agent 設定檔
+mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+cat >/opt/aws/amazon-cloudwatch-agent/etc/cloudwatch-agent.json <<'EOF'
+{
+  "agent": {
+    "metrics_collection_interval": {{ metrics_collection_interval | default(60) }},
+    "run_as_user": "root"
+  },
+  "metrics": {
+    "namespace": "{{ cwagent_namespace | default('CWAgent') }}",
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}"
+    },
+    "metrics_collected": {
+      "mem": {
+        "measurement": [
+          "mem_total",
+          "mem_used",
+          "mem_used_percent"
+        ],
+        "metrics_collection_interval": {{ metrics_collection_interval | default(60) }}
+      },
+      "disk": {
+        "measurement": [
+          "total",
+          "used"
+        ],
+        "metrics_collection_interval": {{ metrics_collection_interval | default(60) }},
+        "resources": [
+          "*"
+        ],
+        "ignore_file_system_types": [
+          "sysfs",
+          "devtmpfs",
+          "tmpfs",
+          "squashfs",
+          "efivarfs"
+        ],
+        "drop_device": false,
+        "append_dimensions": {
+          "VolumeId": "${aws:VolumeId}"
+        }
+      }
+    }
+  }
+}
+EOF
+
+# 啟動 CloudWatch Agent
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/cloudwatch-agent.json -s
