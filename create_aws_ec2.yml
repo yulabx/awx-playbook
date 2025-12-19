@@ -28,6 +28,10 @@
     
     # 專案 Key Pair 命名規則 (自動使用專案專用金鑰)
     default_key_name: "{{ project_name }}-keypair"
+
+    # EC2 IAM Instance Profile 名稱 (可依需求調整)
+    iam_instance_profile_name: EC2-CloudWatchAgent-Role
+
     
     # ─────────────────────────────────────────────
     # 其他從前端/AWX 傳入的參數
@@ -144,6 +148,10 @@
             private_ip_address: "{{ item.private_ip }}"
             device_index: 0
             delete_on_termination: true
+
+        # 掛上 CloudWatch Agent IAM Role
+        iam_instance_profile: "{{ iam_instance_profile_name }}"
+        user_data: "{{ lookup('template', 'templates/cloudwatch_agent_userdata.sh.j2') }}"
         
         # 儲存設定
         volumes:
