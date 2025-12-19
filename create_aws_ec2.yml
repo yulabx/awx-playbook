@@ -173,13 +173,21 @@
         user_data: "{{ lookup('template', 'templates/cloudwatch_agent_userdata.sh.j2') }}"
         
         # 儲存設定
-        block_device_mappings:
-          - device_name: "{{ item.root_device_name }}"
-            ebs:
-              volume_size: "{{ item.volume_size }}"
-              volume_type: gp3
-              delete_on_termination: true
-        
+        volumes: >-
+        {{ item.volume_size is defined
+          | ternary(
+              [{
+                'device_name': item.root_device_name,
+                'ebs': {
+                  'volume_size': item.volume_size,
+                  'volume_type': 'gp3',
+                  'delete_on_termination': true
+                }
+              }],
+              omit
+            )
+        }}
+     
         # 標籤
         tags: "{{ {'Name': project_name + '-' + item.name, 'Project': project_name, 'SubnetName': item.subnet_name, 'Env': project_labels.env, 'ProjectId': project_labels['project.id'], 'ManagedBy': 'Ansible', 'CreatedDate': ansible_date_time.date} | combine(item.tags | default({})) }}"
         
