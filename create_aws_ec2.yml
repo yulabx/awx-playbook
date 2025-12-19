@@ -73,9 +73,19 @@
           {{ ec2_instances | map('combine', {
             'root_device_name': (ami_info.images | selectattr('image_id', 'equalto', item.ami_id) | map(attribute='root_device_name') | list | first | default('/dev/xvda'))
           }) | list }}
+        ec2_volumes: >-
+          {{ [{
+              'device_name': item.root_device_name,
+              'ebs': {
+                'volume_size': item.volume_size,
+                'volume_type': 'gp3',
+                'delete_on_termination': true
+              }
+            }] if item.volume_size is defined else omit }}   
       loop: "{{ ec2_instances }}"
       loop_control:
         loop_var: item
+
 
     # ════════════════════════════════════════════════
     # Task 1: 根據命名規則查詢 VPC ID
@@ -173,20 +183,7 @@
         user_data: "{{ lookup('template', 'templates/cloudwatch_agent_userdata.sh.j2') }}"
         
         # 儲存設定
-        volumes: >-
-        {{ item.volume_size is defined
-          | ternary(
-              [{
-                'device_name': item.root_device_name,
-                'ebs': {
-                  'volume_size': item.volume_size,
-                  'volume_type': 'gp3',
-                  'delete_on_termination': true
-                }
-              }],
-              omit
-            )
-        }}
+        volumes: "{{ ec2_volumes }}"
      
         # 標籤
         tags: "{{ {'Name': project_name + '-' + item.name, 'Project': project_name, 'SubnetName': item.subnet_name, 'Env': project_labels.env, 'ProjectId': project_labels['project.id'], 'ManagedBy': 'Ansible', 'CreatedDate': ansible_date_time.date} | combine(item.tags | default({})) }}"
