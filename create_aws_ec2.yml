@@ -131,12 +131,18 @@
     - name: Get AMI info
       amazon.aws.ec2_ami_info:
         region: "{{ cluster_region }}"
-        image_ids:
-          - "{{ item.ami_id }}"
+        image_ids: "{{ ec2_instances | map(attribute='ami_id') | list }}"
       register: ami_info
-      loop: "{{ ec2_instances }}"
-      loop_control:
-        loop_var: item
+
+    - name: Build AMI root device map
+      set_fact:
+        ami_root_device_map: >-
+          {{
+            ami_root_device_map | default({}) |
+            combine({ item.image_id: item.root_device_name })
+          }}
+      loop: "{{ ami_info.images }}"
+
 
     # ════════════════════════════════════════════════
     # Task 4: 建立 EC2 實例
@@ -169,7 +175,7 @@
         
         # 儲存設定
         volumes:
-          - device_name: "{{ ami_info.results[loop.index0].images[0].root_device_name }}"
+          - device_name: "{{ ami_root_device_map[item.ami_id] }}"
             ebs:
               volume_size: "{{ item.volume_size }}"
               volume_type: gp3
