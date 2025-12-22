@@ -99,11 +99,40 @@
       loop: "{{ subnets }}"
       register: subnet_results
 
+
     - name: Get public subnets
       set_fact:
         public_subnet_ids: "{{ subnet_results.results |
                                selectattr('subnet.map_public_ip_on_launch','equalto',true) |
                                map(attribute='subnet.id') | list }}"
+
+    # 建立 NAT Gateway 用的 EIP
+    - name: Create Elastic IP for NAT Gateway
+      amazon.aws.ec2_eip:
+        region: "{{ cluster_region }}"
+        in_vpc: true
+        state: present
+        tags:
+          Name: "{{ project_name }}-nat-eip"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+      register: nat_eip_result
+      when: private_subnet_ids | length > 0 and public_subnet_ids | length > 0
+
+    # 建立 NAT Gateway（放在第一個 public subnet）
+    - name: Create NAT Gateway
+      amazon.aws.ec2_vpc_nat_gateway:
+        region: "{{ cluster_region }}"
+        subnet_id: "{{ public_subnet_ids[0] }}"
+        allocation_id: "{{ nat_eip_result.eip_allocation_id }}"
+        state: present
+        tags:
+          Name: "{{ project_name }}-natgw"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+      register: natgw_result
+      when: private_subnet_ids | length > 0 and public_subnet_ids | length > 0
+
 
     - name: Create public route table
       amazon.aws.ec2_vpc_route_table:
@@ -128,18 +157,32 @@
                                 selectattr('subnet.map_public_ip_on_launch','equalto',false) |
                                 map(attribute='subnet.id') | list }}"
 
+
+    # 建立 private route table 並指向 NAT Gateway
     - name: Create private route table
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         state: present
-        subnets: "{{ private_subnet_ids }}"
         tags:
           Name: "{{ project_name }}-rt-private"
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
-        routes: []
-      when: private_subnet_ids | length > 0
+        routes:
+          - dest: 0.0.0.0/0
+            nat_gateway_id: "{{ natgw_result.nat_gateway_id }}"
+      register: private_rt_result
+      when: private_subnet_ids | length > 0 and natgw_result.nat_gateway_id is defined
+
+    # 將 private subnet 綁定到 private route table
+    - name: Associate private subnets to private route table
+      amazon.aws.ec2_vpc_route_table_association:
+        region: "{{ cluster_region }}"
+        subnet_id: "{{ item }}"
+        route_table_id: "{{ private_rt_result.route_table.id }}"
+        state: present
+      loop: "{{ private_subnet_ids }}"
+      when: private_subnet_ids | length > 0 and private_rt_result.route_table.id is defined
 
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
