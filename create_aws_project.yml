@@ -72,8 +72,8 @@
     - name: Get public subnets
       set_fact:
         public_subnet_ids: "{{ subnet_results.results |
-                               selectattr('subnet.map_public_ip_on_launch','equalto',true) |
-                               map(attribute='subnet.id') | list }}"
+          selectattr('subnet.map_public_ip_on_launch','equalto',true) |
+          map(attribute='subnet.id') | list }}"
 
     - name: Create public route table
       amazon.aws.ec2_vpc_route_table:
@@ -95,10 +95,10 @@
     - name: Get private subnets
       set_fact:
         private_subnet_ids: "{{ subnet_results.results |
-                                selectattr('subnet.map_public_ip_on_launch','equalto',false) |
-                                map(attribute='subnet.id') | list }}"
+          selectattr('subnet.map_public_ip_on_launch','equalto',false) |
+          map(attribute='subnet.id') | list }}"
 
-    - name: Create private route table (original behavior, empty)
+    - name: Create private route table (original empty)
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
@@ -112,7 +112,7 @@
       when: private_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
-    # 🆕 NAT Gateway for Private Subnet（新增區塊）
+    # NAT Gateway for Private Subnet（新增）
     # ─────────────────────────────────────────────
 
     - name: Select public subnet for NAT Gateway
@@ -147,14 +147,18 @@
       register: nat_gw
       when: private_subnet_ids | length > 0
 
+    # ✅ 修正後：不會再噴 nat_gateways error
     - name: Wait for NAT Gateway to become available
       amazon.aws.ec2_vpc_nat_gateway_info:
         region: "{{ cluster_region }}"
         nat_gateway_ids:
           - "{{ nat_gw.nat_gateway_id }}"
       register: nat_gw_info
-      until: nat_gw_info.nat_gateways | length > 0 and
-             nat_gw_info.nat_gateways[0].state == "available"
+      until:
+        - nat_gw_info is defined
+        - nat_gw_info.nat_gateways is defined
+        - nat_gw_info.nat_gateways | length > 0
+        - nat_gw_info.nat_gateways[0].state == "available"
       retries: 15
       delay: 20
       changed_when: false
@@ -182,6 +186,7 @@
     # ─────────────────────────────────────────────
     # Security Groups（原封不動）
     # ─────────────────────────────────────────────
+
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
