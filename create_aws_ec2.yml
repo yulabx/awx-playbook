@@ -123,27 +123,7 @@
           - "{{ subnet_map }}"
           - "Security Group 對應:"
           - "{{ sg_map | default({}) }}"
-
-
-    # ════════════════════════════════════════════════
-    # Task 3.5: 查詢 AMI root device name
-    # ════════════════════════════════════════════════
-    - name: Get AMI info
-      amazon.aws.ec2_ami_info:
-        region: "{{ cluster_region }}"
-        image_ids: "{{ ec2_instances | map(attribute='ami_id') | list }}"
-      register: ami_info
-
-    - name: Build AMI root device map
-      set_fact:
-        ami_root_device_map: >-
-          {{
-            ami_root_device_map | default({}) |
-            combine({ item.image_id: item.root_device_name })
-          }}
-      loop: "{{ ami_info.images }}"
-
-
+    
     # ════════════════════════════════════════════════
     # Task 4: 建立 EC2 實例
     # ════════════════════════════════════════════════
@@ -175,13 +155,12 @@
         
         # 儲存設定
         volumes:
-          - device_name: "{{ ami_root_device_map[item.ami_id] }}"
+          - device_name: /dev/xvda
             ebs:
               volume_size: "{{ item.volume_size }}"
               volume_type: gp3
               delete_on_termination: true
-
-
+        
         # 標籤
         tags: "{{ {'Name': project_name + '-' + item.name, 'Project': project_name, 'SubnetName': item.subnet_name, 'Env': project_labels.env, 'ProjectId': project_labels['project.id'], 'ManagedBy': 'Ansible', 'CreatedDate': ansible_date_time.date} | combine(item.tags | default({})) }}"
         
