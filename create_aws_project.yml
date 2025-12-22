@@ -158,20 +158,9 @@
       register: nat_gw
       when: enable_nat_gateway | bool
 
-    # ⭐ 關鍵補強：等待 NAT Gateway 可用
-    - name: Wait for NAT Gateway to become available
-      amazon.aws.ec2_vpc_nat_gateway_info:
-        region: "{{ cluster_region }}"
-        filters:
-          nat-gateway-id: "{{ nat_gw.nat_gateway_id }}"
-      register: nat_gw_info
-      until: nat_gw_info.nat_gateways[0].state == 'available'
-      retries: 30
-      delay: 10
-      when: enable_nat_gateway | bool
-
     # ─────────────────────────────────────────────
     # Private Route Table → NAT Gateway
+    # ★ 最小改動：retry + 不致命
     # ─────────────────────────────────────────────
     - name: Create private route table
       amazon.aws.ec2_vpc_route_table:
@@ -186,6 +175,11 @@
         routes:
           - dest: 0.0.0.0/0
             nat_gateway_id: "{{ nat_gw.nat_gateway_id }}"
+      register: private_rt_result
+      retries: 6
+      delay: 20
+      until: private_rt_result is not failed
+      failed_when: false
       when:
         - enable_nat_gateway | bool
         - private_subnet_ids | length > 0
