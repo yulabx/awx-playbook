@@ -203,7 +203,9 @@
 
     - name: Set instance_id for artifacts
       set_stats:
-        instance_id: "{{ ec2_results.results[0].instances[0].instance_id }}"
+        data:
+          instance_id: "{{ ec2_results.results[0].instances[0].instance_id }}"
+
 
     # ════════════════════════════════════════════════
     # Task 6: 顯示建立結果
@@ -243,4 +245,5 @@
           - "  2. EC2 有 IAM Role: AmazonSSMManagedInstanceCore"
           - "  3. 網路可連到 ssm.ap-northeast-1.amazonaws.com (或使用 VPC Endpoint)"
           - "══════════════════════════════════════════════════════════"
+
 
