@@ -1,7 +1,6 @@
 ---
-# Step 1: Create VPC / Subnets / Security Groups / Route Tables / SSH Key
-
-- name: Step 1 - Create VPC, Subnets, Security Groups
+# Step 1: Create VPC / Subnets / Security Groups / Route Tables / SSH Key (+ NAT Gateway)
+- name: Step 1 - Create VPC, Subnets, Security Groups, NAT Gateway
   hosts: localhost
   gather_facts: true
   collections:
@@ -9,43 +8,28 @@
 
   vars:
     # ─────────────────────────────────────────────
-    # 從 AWX Survey / API 傳入的參數
-    # ─────────────────────────────────────────────
-    # cluster_region: "ap-northeast-1"       # AWS Region (選填，預設 ap-northeast-1)
-    
-    # ─────────────────────────────────────────────
-    # 預設值
+    # 預設 Region / AZ
     # ─────────────────────────────────────────────
     default_cluster_region: ap-northeast-1
     cluster_region: "{{ cluster_region | default(default_cluster_region) }}"
     default_az: "{{ cluster_region }}a"
-    
+
     # ─────────────────────────────────────────────
-    # 外部 SSH 存取控制 (安全設定)
+    # NAT Gateway 設定
     # ─────────────────────────────────────────────
-    enable_external_ssh: true           # 是否允許外部 SSH (true=測試, false=生產)
-    office_ip: "0.0.0.0/0"              # 允許 SSH 的來源 IP (空字串=不開放)
-    
+    enable_nat_gateway: true
+
     # ─────────────────────────────────────────────
-    # 從 AWX Survey / API 傳入的參數
+    # 外部 SSH 控制（測試/正式切換）
     # ─────────────────────────────────────────────
-    # project_name: "ita"                    # 專案名稱
-    # project_labels:                        # 專案標籤
-    #   env: "dev"
-    #   project.id: "ita"
-    # vpc_cidr: "10.20.0.0/16"               # VPC CIDR
-    # subnets:                               # Subnet 列表 (物件陣列)
-    #   - name: "ita-bastion-subnet"          # Subnet 名稱 (完整名稱,由 UI 串好)
-    #     cidr: "10.20.1.0/28"               # CIDR
-    #     is_public: true                    # 是否為 Public Subnet
-    #     purpose: "bastion"                 # 用途
-    #   - name: "ita-app-subnet"
-    #     cidr: "10.20.10.0/24"
-    #     is_public: false
-    #     purpose: "application"
+    enable_external_ssh: true
+    office_ip: "{{ office_ip | default('') }}"
 
   tasks:
 
+    # ─────────────────────────────────────────────
+    # VPC
+    # ─────────────────────────────────────────────
     - name: Create VPC
       amazon.aws.ec2_vpc_net:
         region: "{{ cluster_region }}"
@@ -64,6 +48,9 @@
       set_fact:
         vpc_id: "{{ vpc_result.vpc.id }}"
 
+    # ─────────────────────────────────────────────
+    # Internet Gateway (only if public subnet exists)
+    # ─────────────────────────────────────────────
     - name: Create Internet Gateway
       amazon.aws.ec2_vpc_igw:
         region: "{{ cluster_region }}"
@@ -81,6 +68,9 @@
         igw_id: "{{ igw_result.gateway_id }}"
       when: igw_result.gateway_id is defined
 
+    # ─────────────────────────────────────────────
+    # Subnets
+    # ─────────────────────────────────────────────
     - name: Create Subnets
       amazon.aws.ec2_vpc_subnet:
         region: "{{ cluster_region }}"
@@ -99,41 +89,25 @@
       loop: "{{ subnets }}"
       register: subnet_results
 
-
     - name: Get public subnets
       set_fact:
-        public_subnet_ids: "{{ subnet_results.results |
-                               selectattr('subnet.map_public_ip_on_launch','equalto',true) |
-                               map(attribute='subnet.id') | list }}"
+        public_subnet_ids: >-
+          {{ subnet_results.results
+             | selectattr('subnet.map_public_ip_on_launch','equalto',true)
+             | map(attribute='subnet.id')
+             | list }}
 
-    # 建立 NAT Gateway 用的 EIP
-    - name: Create Elastic IP for NAT Gateway
-      amazon.aws.ec2_eip:
-        region: "{{ cluster_region }}"
-        in_vpc: true
-        state: present
-        tags:
-          Name: "{{ project_name }}-nat-eip"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      register: nat_eip_result
-      when: private_subnet_ids | length > 0 and public_subnet_ids | length > 0
+    - name: Get private subnets
+      set_fact:
+        private_subnet_ids: >-
+          {{ subnet_results.results
+             | selectattr('subnet.map_public_ip_on_launch','equalto',false)
+             | map(attribute='subnet.id')
+             | list }}
 
-    # 建立 NAT Gateway（放在第一個 public subnet）
-    - name: Create NAT Gateway
-      amazon.aws.ec2_vpc_nat_gateway:
-        region: "{{ cluster_region }}"
-        subnet_id: "{{ public_subnet_ids[0] }}"
-        allocation_id: "{{ nat_eip_result.eip_allocation_id }}"
-        state: present
-        tags:
-          Name: "{{ project_name }}-natgw"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      register: natgw_result
-      when: private_subnet_ids | length > 0 and public_subnet_ids | length > 0
-
-
+    # ─────────────────────────────────────────────
+    # Public Route Table
+    # ─────────────────────────────────────────────
     - name: Create public route table
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
@@ -151,39 +125,67 @@
         - public_subnet_ids | length > 0
         - igw_id is defined
 
-    - name: Get private subnets
+    # ─────────────────────────────────────────────
+    # NAT Gateway (for private subnets)
+    # ─────────────────────────────────────────────
+    - name: Select public subnet for NAT Gateway
       set_fact:
-        private_subnet_ids: "{{ subnet_results.results |
-                                selectattr('subnet.map_public_ip_on_launch','equalto',false) |
-                                map(attribute='subnet.id') | list }}"
+        nat_public_subnet_id: "{{ public_subnet_ids[0] }}"
+      when:
+        - enable_nat_gateway | bool
+        - public_subnet_ids | length > 0
 
+    - name: Allocate Elastic IP for NAT Gateway
+      amazon.aws.ec2_eip:
+        region: "{{ cluster_region }}"
+        in_vpc: true
+        state: present
+        tags:
+          Name: "{{ project_name }}-nat-eip"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+      register: nat_eip
+      when: enable_nat_gateway | bool
 
-    # 建立 private route table 並指向 NAT Gateway
+    - name: Create NAT Gateway
+      amazon.aws.ec2_vpc_nat_gateway:
+        region: "{{ cluster_region }}"
+        subnet_id: "{{ nat_public_subnet_id }}"
+        allocation_id: "{{ nat_eip.allocation_id }}"
+        state: present
+        tags:
+          Name: "{{ project_name }}-nat-gw"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+      register: nat_gw
+      when: enable_nat_gateway | bool
+
+    # ─────────────────────────────────────────────
+    # Private Route Table (→ NAT Gateway)
+    # ─────────────────────────────────────────────
     - name: Create private route table
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         state: present
+        subnets: "{{ private_subnet_ids }}"
         tags:
           Name: "{{ project_name }}-rt-private"
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
-        routes:
-          - dest: 0.0.0.0/0
-            nat_gateway_id: "{{ natgw_result.nat_gateway_id }}"
-      register: private_rt_result
-      when: private_subnet_ids | length > 0 and natgw_result.nat_gateway_id is defined
+        routes: >-
+          {{
+            enable_nat_gateway | bool
+            | ternary(
+                [{'dest': '0.0.0.0/0', 'nat_gateway_id': nat_gw.nat_gateway_id}],
+                []
+              )
+          }}
+      when: private_subnet_ids | length > 0
 
-    # 將 private subnet 綁定到 private route table
-    - name: Associate private subnets to private route table
-      amazon.aws.ec2_vpc_route_table_association:
-        region: "{{ cluster_region }}"
-        subnet_id: "{{ item }}"
-        route_table_id: "{{ private_rt_result.route_table.id }}"
-        state: present
-      loop: "{{ private_subnet_ids }}"
-      when: private_subnet_ids | length > 0 and private_rt_result.route_table.id is defined
-
+    # ─────────────────────────────────────────────
+    # Security Groups (per subnet)
+    # ─────────────────────────────────────────────
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
@@ -196,19 +198,22 @@
           Project: "{{ project_name }}"
           SubnetName: "{{ item.name }}"
           Env: "{{ project_labels.env }}"
-        rules: >
-          {%- set base_rules = [{'proto': 'all', 'cidr_ip': vpc_cidr}] -%}
-          {%- if enable_external_ssh and office_ip != '' -%}
-            {{ base_rules + [{'proto': 'tcp', 'from_port': 22, 'to_port': 22, 'cidr_ip': office_ip}] }}
-          {%- else -%}
-            {{ base_rules }}
-          {%- endif -%}
+        rules: >-
+          {% set base_rules = [{'proto': 'all', 'cidr_ip': vpc_cidr}] %}
+          {% if enable_external_ssh | bool and office_ip | length > 0 %}
+          {{ base_rules + [{'proto': 'tcp', 'from_port': 22, 'to_port': 22, 'cidr_ip': office_ip}] }}
+          {% else %}
+          {{ base_rules }}
+          {% endif %}
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
       loop: "{{ subnets }}"
       register: sg_results
 
+    # ─────────────────────────────────────────────
+    # Key Pair
+    # ─────────────────────────────────────────────
     - name: Create key pair
       amazon.aws.ec2_key:
         region: "{{ cluster_region }}"
@@ -226,44 +231,25 @@
         private_key_content: "{{ keypair_result.key.private_key | default('') }}"
         is_new_key: "{{ keypair_result.key.private_key is defined }}"
 
+    # ─────────────────────────────────────────────
+    # Summary
+    # ─────────────────────────────────────────────
     - name: Summary
       debug:
         msg:
           - "══════════════════════════════════════════════════════"
-          - "✅ VPC 建立完成"
+          - "✅ VPC / Subnet / NAT Gateway 建立完成"
           - "══════════════════════════════════════════════════════"
           - "VPC ID: {{ vpc_id }}"
           - "Region: {{ cluster_region }}"
-          - "Subnets: {{ subnets | length }} 個"
-          - "Security Groups: {{ sg_results.results | length }} 個"
+          - "Public Subnets: {{ public_subnet_ids | length }}"
+          - "Private Subnets: {{ private_subnet_ids | length }}"
+          - "NAT Gateway: {{ enable_nat_gateway }}"
           - "SSH Key: {{ key_name }}"
           - "══════════════════════════════════════════════════════"
-    
+
     - name: Display SSH Private Key
       debug:
         msg:
-          - "╔══════════════════════════════════════════════════════╗"
-          - "║  🔐 SSH 私鑰 (請立即複製儲存！)                      ║"
-          - "╚══════════════════════════════════════════════════════╝"
-          - ""
-          - "Key Name: {{ key_name }}"
-          - ""
-          - "請將以下內容儲存為 {{ key_name }}.pem："
-          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           - "{{ private_key_content }}"
-          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          - ""
-          - "Linux/Mac 使用："
-          - "  chmod 400 {{ key_name }}.pem"
-          - "  ssh -i {{ key_name }}.pem ec2-user@<IP>"
-          - ""
-          - "⚠️  此私鑰只會顯示一次，請務必立即儲存！"
-          - "╚══════════════════════════════════════════════════════╝"
       when: is_new_key | bool
-    
-    - name: Key already exists
-      debug:
-        msg:
-          - "ℹ️  SSH Key '{{ key_name }}' 已存在"
-          - "   如需重新產生，請先刪除現有 Key Pair"
-      when: not (is_new_key | bool)
