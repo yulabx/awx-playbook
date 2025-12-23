@@ -1,4 +1,4 @@
-# Step 1: Create VPC / Subnets / Security Groups / Route Tables / SSH Key (+ NAT)
+# Step 1: Create VPC / Subnets / Security Groups / Route Tables / SSH Key (+ NAT) (+ CloudWatch VPC Endpoints)
 
 - name: Step 1 - Create VPC, Subnets, Security Groups
   hosts: localhost
@@ -13,6 +13,9 @@
 
     enable_external_ssh: true
     office_ip: "0.0.0.0/0"
+
+    # NAT feature flag (default false; external override allowed via -e / inventory / group_vars)
+    enable_nat_gateway: "{{ enable_nat_gateway | default(false) }}"
 
   tasks:
 
@@ -123,7 +126,7 @@
       when: private_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
-    # NAT Gateway（避免重複建立）
+    # NAT Gateway（避免重複建立，可開關）
     # ─────────────────────────────────────────────
 
     - name: Lookup existing NAT Gateway
@@ -134,12 +137,15 @@
           state: available
           tag:Name: "{{ project_name }}-nat-gw"
       register: existing_nat
-      when: private_subnet_ids | length > 0
+      when:
+        - enable_nat_gateway
+        - private_subnet_ids | length > 0
 
     - name: Use existing NAT Gateway if found
       set_fact:
         nat_gateway_id: "{{ existing_nat.result[0].nat_gateway_id }}"
       when:
+        - enable_nat_gateway
         - existing_nat.result is defined
         - existing_nat.result | length > 0
 
@@ -147,6 +153,7 @@
       set_fact:
         nat_public_subnet_id: "{{ public_subnet_ids[0] }}"
       when:
+        - enable_nat_gateway
         - private_subnet_ids | length > 0
         - public_subnet_ids | length > 0
         - nat_gateway_id is not defined
@@ -162,6 +169,7 @@
           Env: "{{ project_labels.env }}"
       register: nat_eip
       when:
+        - enable_nat_gateway
         - private_subnet_ids | length > 0
         - nat_gateway_id is not defined
 
@@ -177,6 +185,7 @@
           Env: "{{ project_labels.env }}"
       register: nat_gw
       when:
+        - enable_nat_gateway
         - private_subnet_ids | length > 0
         - nat_gateway_id is not defined
 
@@ -184,6 +193,7 @@
       set_fact:
         nat_gateway_id: "{{ nat_gw.nat_gateway_id }}"
       when:
+        - enable_nat_gateway
         - private_subnet_ids | length > 0
         - nat_gateway_id is not defined
 
@@ -204,6 +214,7 @@
       delay: 20
       changed_when: false
       when:
+        - enable_nat_gateway
         - private_subnet_ids | length > 0
         - nat_gateway_id is defined
 
@@ -224,6 +235,7 @@
           - dest: 0.0.0.0/0
             nat_gateway_id: "{{ nat_gateway_id }}"
       when:
+        - enable_nat_gateway
         - private_subnet_ids | length > 0
         - nat_gateway_id is defined
 
@@ -265,6 +277,86 @@
       register: keypair_result
 
     # ─────────────────────────────────────────────
+    # CloudWatch VPC Endpoints (Interface)
+    # ─────────────────────────────────────────────
+    - name: Create VPC Endpoint Security Group
+      amazon.aws.ec2_security_group:
+        region: "{{ cluster_region }}"
+        name: "{{ project_name }}-vpce-sg"
+        description: "SG for VPC Interface Endpoints"
+        vpc_id: "{{ vpc_id }}"
+        state: present
+        tags:
+          Name: "{{ project_name }}-vpce-sg"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
+        rules:
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: "{{ vpc_cidr }}"
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+      register: vpce_sg
+      when: private_subnet_ids | length > 0
+
+    - name: Create CloudWatch Metrics Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.monitoring"
+        vpc_endpoint_type: Interface
+        state: present
+        private_dns_enabled: true
+        subnet_ids: "{{ private_subnet_ids }}"
+        security_group_ids:
+          - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-cloudwatch"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
+      when: private_subnet_ids | length > 0
+
+    - name: Create CloudWatch Logs Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.logs"
+        vpc_endpoint_type: Interface
+        state: present
+        private_dns_enabled: true
+        subnet_ids: "{{ private_subnet_ids }}"
+        security_group_ids:
+          - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-cloudwatch-logs"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
+      when: private_subnet_ids | length > 0
+
+    - name: Create EC2 API Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.ec2"
+        vpc_endpoint_type: Interface
+        state: present
+        private_dns_enabled: true
+        subnet_ids: "{{ private_subnet_ids }}"
+        security_group_ids:
+          - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-ec2"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
+      when: private_subnet_ids | length > 0
+
+    # ─────────────────────────────────────────────
     # Summary
     # ─────────────────────────────────────────────
     - name: Summary
@@ -273,4 +365,6 @@
           - "VPC ID: {{ vpc_id }}"
           - "Public Subnets: {{ public_subnet_ids }}"
           - "Private Subnets: {{ private_subnet_ids }}"
+          - "NAT Enabled: {{ enable_nat_gateway }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
+          - "CloudWatch Endpoints: enabled (monitoring/logs/ec2)"
