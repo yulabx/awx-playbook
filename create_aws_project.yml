@@ -256,7 +256,6 @@
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
         rules:
-          # 允許 VPC 內互通（你可依需求縮小）
           - proto: all
             cidr_ip: "{{ vpc_cidr }}"
         rules_egress:
@@ -348,6 +347,10 @@
         vpc_endpoint_subnets: "{{ private_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-monitoring"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when: private_subnet_ids | length > 0
 
     - name: Create CloudWatch Logs Endpoint
@@ -360,6 +363,10 @@
         vpc_endpoint_subnets: "{{ private_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-logs"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when: private_subnet_ids | length > 0
 
     # ✅ 關鍵：STS endpoint（沒有 NAT 時，CloudWatch Agent / SDK 常會卡在取憑證）
@@ -373,6 +380,10 @@
         vpc_endpoint_subnets: "{{ private_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-sts"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when: private_subnet_ids | length > 0
 
     # 你原本有 EC2 API endpoint：保留（有些情境 agent / tooling 會用到）
@@ -386,6 +397,10 @@
         vpc_endpoint_subnets: "{{ private_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-ec2"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when: private_subnet_ids | length > 0
 
     # （可選）若你用 SSM/Session Manager/Parameter Store 裝 agent 或管機器，建議加
@@ -399,6 +414,10 @@
         vpc_endpoint_subnets: "{{ private_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-ssm"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when:
         - private_subnet_ids | length > 0
         - enable_ssm_endpoints | bool
@@ -413,6 +432,10 @@
         vpc_endpoint_subnets: "{{ private_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-ssmmessages"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when:
         - private_subnet_ids | length > 0
         - enable_ssm_endpoints | bool
@@ -427,6 +450,10 @@
         vpc_endpoint_subnets: "{{ private_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-ec2messages"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
       when:
         - private_subnet_ids | length > 0
         - enable_ssm_endpoints | bool
@@ -444,5 +471,3 @@
           - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
-
-
