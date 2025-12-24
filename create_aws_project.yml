@@ -241,31 +241,7 @@
 
     # ─────────────────────────────────────────────
     # Security Groups
-    # 1) 給 EC2 用的共用 SG（Endpoint SG 將以此為來源）
-    # 2) 保留你原本每 subnet 的 SG（如果你後續還會用）
     # ─────────────────────────────────────────────
-    - name: Create common EC2 Security Group
-      amazon.aws.ec2_security_group:
-        region: "{{ cluster_region }}"
-        name: "{{ project_name }}-ec2-sg"
-        description: "Common SG for EC2 instances in {{ project_name }}"
-        vpc_id: "{{ vpc_id }}"
-        state: present
-        tags:
-          Name: "{{ project_name }}-ec2-sg"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-        rules:
-          - proto: all
-            cidr_ip: "{{ vpc_cidr }}"
-        rules_egress:
-          - proto: all
-            cidr_ip: 0.0.0.0/0
-      register: ec2_common_sg
-
-    - set_fact:
-        ec2_common_sg_id: "{{ ec2_common_sg.group_id }}"
-
     - name: Create Security Groups for each subnet (optional / keep legacy)
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
@@ -330,7 +306,7 @@
           - proto: tcp
             from_port: 443
             to_port: 443
-            group_id: "{{ ec2_common_sg_id }}"
+            cidr_ip: "{{ vpc_cidr }}"
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
@@ -467,7 +443,7 @@
           - "VPC ID: {{ vpc_id }}"
           - "Public Subnets: {{ public_subnet_ids }}"
           - "Private Subnets: {{ private_subnet_ids }}"
-          - "EC2 Common SG: {{ ec2_common_sg_id }}"
           - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
