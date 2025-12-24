@@ -57,8 +57,8 @@
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         state: present
-        enable_dns_support: true
-        enable_dns_hostnames: true
+        dns_support: true
+        dns_hostnames: true
       register: vpc_dns_result
 
     # ─────────────────────────────────────────────
@@ -444,4 +444,5 @@
           - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
 
