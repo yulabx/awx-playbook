@@ -257,7 +257,17 @@
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
           ManagedBy: Ansible
-
+      register: keypair_result    
+      
+    - name: Expose SSH private key to frontend (FIRST TIME ONLY)
+      set_stats:
+        data:
+          ssh_private_key_pem: "{{ keypair_result.key.private_key }}"
+          ssh_keypair_name: "{{ keypair_result.key.name }}"
+      when:
+        - keypair_result.changed
+        - keypair_result.key.private_key is defined
+    
     # ─────────────────────────────────────────────
     # CloudWatch VPC Endpoints (OLD amazon.aws syntax)
     # ─────────────────────────────────────────────
@@ -323,3 +333,4 @@
           - "Private Subnets: {{ private_subnet_ids }}"
           - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
+
