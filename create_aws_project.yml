@@ -1,33 +1,18 @@
 # Step 1: Create VPC / Subnets / Security Groups / Route Tables / SSH Key (+ NAT)
 
-- name: Step 1 - Create VPC, Subnets, Security Groups, Endpoints
+- name: Step 1 - Create VPC, Subnets, Security Groups
   hosts: localhost
   gather_facts: true
   collections:
     - amazon.aws
 
   vars:
-    # ─────────────────────────────────────────────
-    # Region (wrapper pattern, safe)
-    # ─────────────────────────────────────────────
     default_cluster_region: ap-northeast-1
-    cluster_region_input: "{{ cluster_region | default(omit) }}"
-    cluster_region: "{{ cluster_region_input | default(default_cluster_region) }}"
+    cluster_region: "{{ cluster_region | default(default_cluster_region) }}"
     default_az: "{{ cluster_region }}a"
 
     enable_external_ssh: true
     office_ip: "0.0.0.0/0"
-
-    # ─────────────────────────────────────────────
-    # NAT feature flag (wrapper pattern, safe)
-    # ─────────────────────────────────────────────
-    default_enable_nat_gateway: false
-    enable_nat_gateway_effective: "{{ enable_nat_gateway | default(default_enable_nat_gateway) }}"
-
-    # ─────────────────────────────────────────────
-    # Endpoints feature flags
-    # ─────────────────────────────────────────────
-    enable_ssm_endpoints: false   # 若你不用 SSM，可設 false
 
   tasks:
 
@@ -50,16 +35,6 @@
 
     - set_fact:
         vpc_id: "{{ vpc_result.vpc.id }}"
-
-    # ※ 確保 VPC DNS 功能正常（Private DNS / VPCE 依賴）
-    - name: Ensure VPC DNS support/hostnames enabled
-      amazon.aws.ec2_vpc_net:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        state: present
-        dns_support: true
-        dns_hostnames: true
-      register: vpc_dns_result
 
     # ─────────────────────────────────────────────
     # IGW
@@ -112,7 +87,7 @@
           | map(attribute='subnet.id') | list }}"
 
     # ─────────────────────────────────────────────
-    # Route Tables
+    # Public Route Table
     # ─────────────────────────────────────────────
     - name: Create public route table
       amazon.aws.ec2_vpc_route_table:
@@ -131,7 +106,10 @@
         - public_subnet_ids | length > 0
         - igw_id is defined
 
-    - name: Create private route table (empty by default)
+    # ─────────────────────────────────────────────
+    # Private Route Table（原本行為）
+    # ─────────────────────────────────────────────
+    - name: Create private route table (empty)
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
@@ -145,8 +123,9 @@
       when: private_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
-    # NAT Gateway (optional)
+    # NAT Gateway（避免重複建立）
     # ─────────────────────────────────────────────
+
     - name: Lookup existing NAT Gateway
       amazon.aws.ec2_vpc_nat_gateway_info:
         region: "{{ cluster_region }}"
@@ -155,24 +134,22 @@
           state: available
           tag:Name: "{{ project_name }}-nat-gw"
       register: existing_nat
-      when:
-        - enable_nat_gateway_effective
-        - private_subnet_ids | length > 0
+      when: private_subnet_ids | length > 0
 
     - name: Use existing NAT Gateway if found
       set_fact:
         nat_gateway_id: "{{ existing_nat.result[0].nat_gateway_id }}"
       when:
-        - enable_nat_gateway_effective
-        - existing_nat.result | default([]) | length > 0
+        - existing_nat.result is defined
+        - existing_nat.result | length > 0
 
     - name: Select public subnet for NAT Gateway
       set_fact:
         nat_public_subnet_id: "{{ public_subnet_ids[0] }}"
       when:
-        - enable_nat_gateway_effective
-        - nat_gateway_id is not defined
+        - private_subnet_ids | length > 0
         - public_subnet_ids | length > 0
+        - nat_gateway_id is not defined
 
     - name: Allocate Elastic IP for NAT Gateway
       amazon.aws.ec2_eip:
@@ -185,10 +162,10 @@
           Env: "{{ project_labels.env }}"
       register: nat_eip
       when:
-        - enable_nat_gateway_effective
+        - private_subnet_ids | length > 0
         - nat_gateway_id is not defined
 
-    - name: Create NAT Gateway
+    - name: Create NAT Gateway (only if not exists)
       amazon.aws.ec2_vpc_nat_gateway:
         region: "{{ cluster_region }}"
         subnet_id: "{{ nat_public_subnet_id }}"
@@ -200,28 +177,39 @@
           Env: "{{ project_labels.env }}"
       register: nat_gw
       when:
-        - enable_nat_gateway_effective
+        - private_subnet_ids | length > 0
         - nat_gateway_id is not defined
 
-    - set_fact:
+    - name: Set NAT Gateway ID (new)
+      set_fact:
         nat_gateway_id: "{{ nat_gw.nat_gateway_id }}"
       when:
-        - enable_nat_gateway_effective
+        - private_subnet_ids | length > 0
         - nat_gateway_id is not defined
 
+    # ─────────────────────────────────────────────
+    # Wait for NAT ready（只在新建時）
+    # ─────────────────────────────────────────────
     - name: Wait for NAT Gateway to become available
       amazon.aws.ec2_vpc_nat_gateway_info:
         region: "{{ cluster_region }}"
         nat_gateway_ids:
           - "{{ nat_gateway_id }}"
       register: nat_gw_info
-      until: nat_gw_info.result[0].state == "available"
+      until:
+        - nat_gw_info.result is defined
+        - nat_gw_info.result | length > 0
+        - nat_gw_info.result[0].state == "available"
       retries: 15
       delay: 20
+      changed_when: false
       when:
-        - enable_nat_gateway_effective
+        - private_subnet_ids | length > 0
         - nat_gateway_id is defined
 
+    # ─────────────────────────────────────────────
+    # Attach NAT to Private Route Table
+    # ─────────────────────────────────────────────
     - name: Attach NAT Gateway to private route table
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
@@ -236,13 +224,13 @@
           - dest: 0.0.0.0/0
             nat_gateway_id: "{{ nat_gateway_id }}"
       when:
-        - enable_nat_gateway_effective
+        - private_subnet_ids | length > 0
         - nat_gateway_id is defined
 
     # ─────────────────────────────────────────────
-    # Security Groups
+    # Security Groups（原封不動）
     # ─────────────────────────────────────────────
-    - name: Create Security Groups for each subnet (optional / keep legacy)
+    - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
         name: "{{ item.name | regex_replace('-subnet$', '-sg') }}"
@@ -284,155 +272,7 @@
       when:
         - keypair_result.changed
         - keypair_result.key.private_key is defined
-
-    # ─────────────────────────────────────────────
-    # VPC Interface Endpoints for CloudWatch / STS (+ optional SSM)
-    # 重要改動：
-    # 1) 加上 STS endpoint（private subnet 沒 NAT 時必備）
-    # ─────────────────────────────────────────────
-    - name: Create VPC Endpoint Security Group
-      amazon.aws.ec2_security_group:
-        region: "{{ cluster_region }}"
-        name: "{{ project_name }}-vpce-sg"
-        description: "SG for VPC Interface Endpoints"
-        vpc_id: "{{ vpc_id }}"
-        state: present
-        tags:
-          Name: "{{ project_name }}-vpce-sg"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-        rules:
-          - proto: tcp
-            from_port: 443
-            to_port: 443
-            cidr_ip: "{{ vpc_cidr }}"
-        rules_egress:
-          - proto: all
-            cidr_ip: 0.0.0.0/0
-      register: vpce_sg
-      when: private_subnet_ids | length > 0
-
-    - name: Create CloudWatch Metrics Endpoint
-      amazon.aws.ec2_vpc_endpoint:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.monitoring"
-        vpc_endpoint_type: Interface
-        state: present
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
-        vpc_endpoint_security_groups:
-          - "{{ vpce_sg.group_id }}"
-        tags:
-          Name: "{{ project_name }}-vpce-monitoring"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      when: private_subnet_ids | length > 0
-
-    - name: Create CloudWatch Logs Endpoint
-      amazon.aws.ec2_vpc_endpoint:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.logs"
-        vpc_endpoint_type: Interface
-        state: present
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
-        vpc_endpoint_security_groups:
-          - "{{ vpce_sg.group_id }}"
-        tags:
-          Name: "{{ project_name }}-vpce-logs"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      when: private_subnet_ids | length > 0
-
-    # ✅ 關鍵：STS endpoint（沒有 NAT 時，CloudWatch Agent / SDK 常會卡在取憑證）
-    - name: Create STS Endpoint (required for private subnet without NAT)
-      amazon.aws.ec2_vpc_endpoint:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.sts"
-        vpc_endpoint_type: Interface
-        state: present
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
-        vpc_endpoint_security_groups:
-          - "{{ vpce_sg.group_id }}"
-        tags:
-          Name: "{{ project_name }}-vpce-sts"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      when: private_subnet_ids | length > 0
-
-    # 你原本有 EC2 API endpoint：保留（有些情境 agent / tooling 會用到）
-    - name: Create EC2 API Endpoint
-      amazon.aws.ec2_vpc_endpoint:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.ec2"
-        vpc_endpoint_type: Interface
-        state: present
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
-        vpc_endpoint_security_groups:
-          - "{{ vpce_sg.group_id }}"
-        tags:
-          Name: "{{ project_name }}-vpce-ec2"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      when: private_subnet_ids | length > 0
-
-    # （可選）若你用 SSM/Session Manager/Parameter Store 裝 agent 或管機器，建議加
-    - name: Create SSM Endpoint
-      amazon.aws.ec2_vpc_endpoint:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.ssm"
-        vpc_endpoint_type: Interface
-        state: present
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
-        vpc_endpoint_security_groups:
-          - "{{ vpce_sg.group_id }}"
-        tags:
-          Name: "{{ project_name }}-vpce-ssm"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      when:
-        - private_subnet_ids | length > 0
-        - enable_ssm_endpoints | bool
-
-    - name: Create SSM Messages Endpoint
-      amazon.aws.ec2_vpc_endpoint:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.ssmmessages"
-        vpc_endpoint_type: Interface
-        state: present
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
-        vpc_endpoint_security_groups:
-          - "{{ vpce_sg.group_id }}"
-        tags:
-          Name: "{{ project_name }}-vpce-ssmmessages"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      when:
-        - private_subnet_ids | length > 0
-        - enable_ssm_endpoints | bool
-
-    - name: Create EC2 Messages Endpoint
-      amazon.aws.ec2_vpc_endpoint:
-        region: "{{ cluster_region }}"
-        vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.ec2messages"
-        vpc_endpoint_type: Interface
-        state: present
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
-        vpc_endpoint_security_groups:
-          - "{{ vpce_sg.group_id }}"
-        tags:
-          Name: "{{ project_name }}-vpce-ec2messages"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-      when:
-        - private_subnet_ids | length > 0
-        - enable_ssm_endpoints | bool
-
+        
     # ─────────────────────────────────────────────
     # Summary
     # ─────────────────────────────────────────────
@@ -442,8 +282,5 @@
           - "VPC ID: {{ vpc_id }}"
           - "Public Subnets: {{ public_subnet_ids }}"
           - "Private Subnets: {{ private_subnet_ids }}"
-          - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
-          - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
-
 
