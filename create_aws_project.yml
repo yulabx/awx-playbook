@@ -1,4 +1,4 @@
-- name: Step 1 - Create VPC, Subnets, Security Groups
+- name: Step 1 - Create VPC, Subnets, Security Groups, Endpoints
   hosts: localhost
   gather_facts: true
   collections:
@@ -22,6 +22,11 @@
     default_enable_nat_gateway: false
     enable_nat_gateway_effective: "{{ enable_nat_gateway | default(default_enable_nat_gateway) }}"
 
+    # ─────────────────────────────────────────────
+    # Endpoints feature flags
+    # ─────────────────────────────────────────────
+    enable_ssm_endpoints: false   # 若你不用 SSM，可設 false
+
   tasks:
 
     # ─────────────────────────────────────────────
@@ -43,6 +48,16 @@
 
     - set_fact:
         vpc_id: "{{ vpc_result.vpc.id }}"
+
+    # ※ 確保 VPC DNS 功能正常（Private DNS / VPCE 依賴）
+    - name: Ensure VPC DNS support/hostnames enabled
+      amazon.aws.ec2_vpc_net:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        state: present
+        enable_dns_support: true
+        enable_dns_hostnames: true
+      register: vpc_dns_result
 
     # ─────────────────────────────────────────────
     # IGW
@@ -114,7 +129,7 @@
         - public_subnet_ids | length > 0
         - igw_id is defined
 
-    - name: Create private route table (empty)
+    - name: Create private route table (empty by default)
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
@@ -224,8 +239,33 @@
 
     # ─────────────────────────────────────────────
     # Security Groups
+    # 1) 給 EC2 用的共用 SG（Endpoint SG 將以此為來源）
+    # 2) 保留你原本每 subnet 的 SG（如果你後續還會用）
     # ─────────────────────────────────────────────
-    - name: Create Security Groups for each subnet
+    - name: Create common EC2 Security Group
+      amazon.aws.ec2_security_group:
+        region: "{{ cluster_region }}"
+        name: "{{ project_name }}-ec2-sg"
+        description: "Common SG for EC2 instances in {{ project_name }}"
+        vpc_id: "{{ vpc_id }}"
+        state: present
+        tags:
+          Name: "{{ project_name }}-ec2-sg"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+        rules:
+          # 允許 VPC 內互通（你可依需求縮小）
+          - proto: all
+            cidr_ip: "{{ vpc_cidr }}"
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+      register: ec2_common_sg
+
+    - set_fact:
+        ec2_common_sg_id: "{{ ec2_common_sg.group_id }}"
+
+    - name: Create Security Groups for each subnet (optional / keep legacy)
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
         name: "{{ item.name | regex_replace('-subnet$', '-sg') }}"
@@ -257,8 +297,8 @@
           Project: "{{ project_name }}"
           Env: "{{ project_labels.env }}"
           ManagedBy: Ansible
-      register: keypair_result    
-      
+      register: keypair_result
+
     - name: Expose SSH private key to frontend (FIRST TIME ONLY)
       set_stats:
         data:
@@ -267,9 +307,12 @@
       when:
         - keypair_result.changed
         - keypair_result.key.private_key is defined
-    
+
     # ─────────────────────────────────────────────
-    # CloudWatch VPC Endpoints (OLD amazon.aws syntax)
+    # VPC Interface Endpoints for CloudWatch / STS (+ optional SSM)
+    # 重要改動：
+    # 1) Endpoint SG 入站來源改成 EC2 SG（不要用 CIDR）
+    # 2) 加上 STS endpoint（private subnet 沒 NAT 時必備）
     # ─────────────────────────────────────────────
     - name: Create VPC Endpoint Security Group
       amazon.aws.ec2_security_group:
@@ -278,11 +321,18 @@
         description: "SG for VPC Interface Endpoints"
         vpc_id: "{{ vpc_id }}"
         state: present
+        tags:
+          Name: "{{ project_name }}-vpce-sg"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
         rules:
           - proto: tcp
             from_port: 443
             to_port: 443
-            cidr_ip: "{{ vpc_cidr }}"
+            group_id: "{{ ec2_common_sg_id }}"
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
       register: vpce_sg
       when: private_subnet_ids | length > 0
 
@@ -310,6 +360,20 @@
           - "{{ vpce_sg.group_id }}"
       when: private_subnet_ids | length > 0
 
+    # ✅ 關鍵：STS endpoint（沒有 NAT 時，CloudWatch Agent / SDK 常會卡在取憑證）
+    - name: Create STS Endpoint (required for private subnet without NAT)
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.sts"
+        vpc_endpoint_type: Interface
+        state: present
+        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
+        vpc_endpoint_security_groups:
+          - "{{ vpce_sg.group_id }}"
+      when: private_subnet_ids | length > 0
+
+    # 你原本有 EC2 API endpoint：保留（有些情境 agent / tooling 會用到）
     - name: Create EC2 API Endpoint
       amazon.aws.ec2_vpc_endpoint:
         region: "{{ cluster_region }}"
@@ -322,6 +386,49 @@
           - "{{ vpce_sg.group_id }}"
       when: private_subnet_ids | length > 0
 
+    # （可選）若你用 SSM/Session Manager/Parameter Store 裝 agent 或管機器，建議加
+    - name: Create SSM Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.ssm"
+        vpc_endpoint_type: Interface
+        state: present
+        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
+        vpc_endpoint_security_groups:
+          - "{{ vpce_sg.group_id }}"
+      when:
+        - private_subnet_ids | length > 0
+        - enable_ssm_endpoints | bool
+
+    - name: Create SSM Messages Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.ssmmessages"
+        vpc_endpoint_type: Interface
+        state: present
+        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
+        vpc_endpoint_security_groups:
+          - "{{ vpce_sg.group_id }}"
+      when:
+        - private_subnet_ids | length > 0
+        - enable_ssm_endpoints | bool
+
+    - name: Create EC2 Messages Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.ec2messages"
+        vpc_endpoint_type: Interface
+        state: present
+        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
+        vpc_endpoint_security_groups:
+          - "{{ vpce_sg.group_id }}"
+      when:
+        - private_subnet_ids | length > 0
+        - enable_ssm_endpoints | bool
+
     # ─────────────────────────────────────────────
     # Summary
     # ─────────────────────────────────────────────
@@ -331,6 +438,7 @@
           - "VPC ID: {{ vpc_id }}"
           - "Public Subnets: {{ public_subnet_ids }}"
           - "Private Subnets: {{ private_subnet_ids }}"
+          - "EC2 Common SG: {{ ec2_common_sg_id }}"
           - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
-
+          - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
