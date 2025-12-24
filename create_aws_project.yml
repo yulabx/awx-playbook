@@ -1,3 +1,5 @@
+# Step 1: Create VPC / Subnets / Security Groups / Route Tables / SSH Key (+ NAT)
+
 - name: Step 1 - Create VPC, Subnets, Security Groups, Endpoints
   hosts: localhost
   gather_facts: true
@@ -442,3 +444,4 @@
           - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
