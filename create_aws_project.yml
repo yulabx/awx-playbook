@@ -288,8 +288,7 @@
     # ─────────────────────────────────────────────
     # VPC Interface Endpoints for CloudWatch / STS (+ optional SSM)
     # 重要改動：
-    # 1) Endpoint SG 入站來源改成 EC2 SG（不要用 CIDR）
-    # 2) 加上 STS endpoint（private subnet 沒 NAT 時必備）
+    # 1) 加上 STS endpoint（private subnet 沒 NAT 時必備）
     # ─────────────────────────────────────────────
     - name: Create VPC Endpoint Security Group
       amazon.aws.ec2_security_group:
@@ -446,4 +445,5 @@
           - "NAT Enabled: {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
 
