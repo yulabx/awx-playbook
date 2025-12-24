@@ -7,13 +7,24 @@
     - amazon.aws
 
   vars:
+    # ─────────────────────────────────────────────
+    # 從 AWX Survey / API 傳入的參數
+    # ─────────────────────────────────────────────
+    # cluster_region: "ap-northeast-1"       # AWS Region (選填，預設 ap-northeast-1)
+    
+    # ─────────────────────────────────────────────
+    # 預設值
+    # ─────────────────────────────────────────────
     default_cluster_region: ap-northeast-1
     cluster_region: "{{ cluster_region | default(default_cluster_region) }}"
     default_az: "{{ cluster_region }}a"
 
-    enable_external_ssh: true
-    office_ip: "0.0.0.0/0"
-
+    # ─────────────────────────────────────────────
+    # 外部 SSH 存取控制 (安全設定)
+    # ─────────────────────────────────────────────
+    enable_external_ssh: true           # 是否允許外部 SSH (true=測試, false=生產)
+    office_ip: "0.0.0.0/0"              # 允許 SSH 的來源 IP (空字串=不開放)
+    
   tasks:
 
     # ─────────────────────────────────────────────
@@ -242,13 +253,18 @@
           Project: "{{ project_name }}"
           SubnetName: "{{ item.name }}"
           Env: "{{ project_labels.env }}"
-        rules:
-          - proto: all
-            cidr_ip: "{{ vpc_cidr }}"
+        rules: >
+          {%- set base_rules = [{'proto': 'all', 'cidr_ip': vpc_cidr}] -%}
+          {%- if enable_external_ssh and office_ip != '' -%}
+            {{ base_rules + [{'proto': 'tcp', 'from_port': 22, 'to_port': 22, 'cidr_ip': office_ip}] }}
+          {%- else -%}
+            {{ base_rules }}
+          {%- endif -%}
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
       loop: "{{ subnets }}"
+      register: sg_results
 
     # ─────────────────────────────────────────────
     # Key Pair
