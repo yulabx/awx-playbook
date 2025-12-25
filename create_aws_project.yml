@@ -75,7 +75,7 @@
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
         cidr: "{{ item.cidr }}"
-        az: "{{ item.az }}"
+        az: "{{ item.az | default(default_az) }}"
         map_public: "{{ item.is_public }}"
         state: present
         tags:
@@ -329,4 +329,5 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
 
