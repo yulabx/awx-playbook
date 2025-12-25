@@ -126,7 +126,7 @@
           | map(attribute='subnet.id') | list }}"
 
     # ─────────────────────────────────────────────
-    # Validate NAT prerequisites  ✅ 新增
+    # Validate NAT prerequisites
     # ─────────────────────────────────────────────
     - name: Validate NAT prerequisites
       assert:
@@ -251,6 +251,7 @@
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
         name: "{{ item.name | regex_replace('-subnet$','-sg') }}"
+        description: "Security group for subnet {{ item.name }}"   # ✅ FIX
         vpc_id: "{{ vpc_id }}"
         state: present
         rules: "{{ sg_ingress_rules }}"
@@ -269,6 +270,7 @@
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
         name: "{{ project_name }}-vpce-sg"
+        description: "Security group for VPC interface endpoints"  # ✅ FIX
         vpc_id: "{{ vpc_id }}"
         state: present
         rules:
@@ -285,6 +287,9 @@
         - enable_cloudwatch_endpoints_effective
           or enable_ssm_endpoints_effective
 
+    # ─────────────────────────────────────────────
+    # VPC Endpoints
+    # ─────────────────────────────────────────────
     - name: Create CloudWatch / STS Endpoints
       amazon.aws.ec2_vpc_endpoint:
         region: "{{ cluster_region }}"
@@ -314,7 +319,7 @@
       when:
         - enable_ssm_endpoints_effective
         - private_subnet_ids | length > 0
-        
+
     # ─────────────────────────────────────────────
     # Key Pair
     # ─────────────────────────────────────────────
@@ -337,7 +342,7 @@
       when:
         - keypair_result.changed
         - keypair_result.key.private_key is defined
-        
+
     # ─────────────────────────────────────────────
     # Summary
     # ─────────────────────────────────────────────
@@ -351,4 +356,3 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
-
