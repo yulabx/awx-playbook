@@ -230,6 +230,9 @@
     # ─────────────────────────────────────────────
     # Security Groups（回到可用版）
     # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # Security Groups（原封不動）
+    # ─────────────────────────────────────────────
     - name: Create Security Groups for each subnet
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
@@ -237,6 +240,11 @@
         description: "Security Group for {{ item.name }}"
         vpc_id: "{{ vpc_id }}"
         state: present
+        tags:
+          Name: "{{ item.name | regex_replace('-subnet$', '-sg') }}"
+          Project: "{{ project_name }}"
+          SubnetName: "{{ item.name }}"
+          Env: "{{ project_labels.env }}"
         rules: >
           {%- set base_rules = [{'proto': 'all', 'cidr_ip': vpc_cidr}] -%}
           {%- if enable_external_ssh and office_ip != '' -%}
@@ -248,6 +256,7 @@
           - proto: all
             cidr_ip: 0.0.0.0/0
       loop: "{{ subnets }}"
+      register: sg_results
 
     # ─────────────────────────────────────────────
     # Key Pair（含 expose）
@@ -258,7 +267,11 @@
         name: "{{ project_name }}-keypair"
         state: present
       register: keypair_result
-
+        tags:
+          Name: "{{ item.name | regex_replace('-subnet$', '-sg') }}"
+          Project: "{{ project_name }}"
+          SubnetName: "{{ item.name }}"
+          Env: "{{ project_labels.env }}"
     - name: Expose SSH private key to frontend (FIRST TIME ONLY)
       set_stats:
         data:
@@ -354,3 +367,4 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
