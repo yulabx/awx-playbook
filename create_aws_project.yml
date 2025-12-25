@@ -27,7 +27,7 @@
          | default(default_enable_nat_gateway)
          | bool }}
 
-    default_enable_ssm_endpoints: true
+    default_enable_ssm_endpoints: false
     enable_ssm_endpoints_effective: >-
       {{ enable_ssm_endpoints
          | default(default_enable_ssm_endpoints)
@@ -368,3 +368,4 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
+
