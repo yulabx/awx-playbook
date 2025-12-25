@@ -251,7 +251,7 @@
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
         name: "{{ item.name | regex_replace('-subnet$','-sg') }}"
-        description: "Security group for subnet {{ item.name }}"   # ✅ FIX
+        description: "Security group for subnet {{ item.name }}"
         vpc_id: "{{ vpc_id }}"
         state: present
         rules: "{{ sg_ingress_rules }}"
@@ -270,7 +270,7 @@
       amazon.aws.ec2_security_group:
         region: "{{ cluster_region }}"
         name: "{{ project_name }}-vpce-sg"
-        description: "Security group for VPC interface endpoints"  # ✅ FIX
+        description: "Security group for VPC interface endpoints"
         vpc_id: "{{ vpc_id }}"
         state: present
         rules:
@@ -281,15 +281,17 @@
         rules_egress:
           - proto: all
             cidr_ip: 0.0.0.0/0
+        tags:
+          Name: "{{ project_name }}-vpce-sg"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
       register: vpce_sg
       when:
         - private_subnet_ids | length > 0
         - enable_cloudwatch_endpoints_effective
           or enable_ssm_endpoints_effective
 
-    # ─────────────────────────────────────────────
-    # VPC Endpoints
-    # ─────────────────────────────────────────────
     - name: Create CloudWatch / STS Endpoints
       amazon.aws.ec2_vpc_endpoint:
         region: "{{ cluster_region }}"
@@ -300,6 +302,11 @@
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
+        tags:
+          Name: "{{ project_name }}-vpce-{{ item }}"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
       loop: [monitoring, logs, sts]
       when:
         - enable_cloudwatch_endpoints_effective
@@ -315,6 +322,11 @@
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
+        tags:
+          Name: "{{ project_name }}-vpce-{{ item }}"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
       loop: [ssm, ec2messages, ssmmessages]
       when:
         - enable_ssm_endpoints_effective
