@@ -24,7 +24,7 @@
     # Feature flags
     # ─────────────────────────────────────────────
     enable_nat_gateway: false                  # ✅ NAT 預設 false
-    enable_cloudwatch_endpoints: false         # ✅ CloudWatch Endpoint 開關
+    enable_cloudwatch_endpoints: true          # ✅ CloudWatch Endpoint 開關
     enable_ssm_endpoints: false                # SSM（可選）
 
   tasks:
@@ -290,6 +290,9 @@
         - private_subnet_ids | length > 0
         - enable_cloudwatch_endpoints or enable_ssm_endpoints
 
+    # ─────────────────────────────────────────────
+    # Create CloudWatch Endpoints
+    # ─────────────────────────────────────────────
     - name: Create CloudWatch Endpoints
       amazon.aws.ec2_vpc_endpoint:
         region: "{{ cluster_region }}"
@@ -313,6 +316,31 @@
         - private_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
+    # Create SSM VPC Endpoints
+    # ─────────────────────────────────────────────
+    - name: Create SSM VPC Endpoints
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.{{ item }}"
+        vpc_endpoint_type: Interface
+        state: present
+        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
+        vpc_endpoint_security_groups:
+          - "{{ vpce_sg.group_id }}"
+        tags:
+          Name: "{{ project_name }}-vpce-{{ item }}"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+      loop:
+        - ssm
+        - ssmmessages
+        - ec2messages
+      when:
+        - private_subnet_ids | length > 0
+        - enable_ssm_endpoints | bool
+
+    # ─────────────────────────────────────────────
     # Summary
     # ─────────────────────────────────────────────
     - name: Summary
@@ -325,3 +353,4 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
