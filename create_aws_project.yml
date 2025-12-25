@@ -1,6 +1,6 @@
 - name: Step 1 - Create VPC, Subnets, Security Groups, Endpoints
   hosts: localhost
-  gather_facts: false
+  gather_facts: true
   collections:
     - amazon.aws
 
@@ -329,3 +329,4 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints }}"
+
