@@ -164,6 +164,7 @@
         tags:
           Name: "{{ project_name }}-rt-private"
           Project: "{{ project_name }}"
+      register: private_rt        
       when: private_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
@@ -262,6 +263,27 @@
           Name: "{{ item.name | regex_replace('-subnet$','-sg') }}"
           Project: "{{ project_name }}"
       loop: "{{ subnets }}"
+
+    # ─────────────────────────────────────────────
+    # S3 Gateway Endpoint (only when NAT is disabled)
+    # ─────────────────────────────────────────────
+    - name: Create S3 Gateway Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.s3"
+        vpc_endpoint_type: Gateway
+        route_table_ids:
+          - "{{ private_rt.route_table.id }}"
+        state: present
+        tags:
+          Name: "{{ project_name }}-vpce-s3"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
+      when:
+        - private_subnet_ids | length > 0
+        - not enable_nat_gateway_effective
 
     # ─────────────────────────────────────────────
     # VPC Endpoints
@@ -368,4 +390,5 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
+
 
