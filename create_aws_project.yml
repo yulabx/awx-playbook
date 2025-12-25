@@ -314,7 +314,30 @@
       when:
         - enable_ssm_endpoints_effective
         - private_subnet_ids | length > 0
+        
+    # ─────────────────────────────────────────────
+    # Key Pair
+    # ─────────────────────────────────────────────
+    - name: Create key pair
+      amazon.aws.ec2_key:
+        region: "{{ cluster_region }}"
+        name: "{{ project_name }}-keypair"
+        state: present
+        tags:
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
+      register: keypair_result
 
+    - name: Expose SSH private key to frontend (FIRST TIME ONLY)
+      set_stats:
+        data:
+          ssh_private_key_pem: "{{ keypair_result.key.private_key }}"
+          ssh_keypair_name: "{{ keypair_result.key.name }}"
+      when:
+        - keypair_result.changed
+        - keypair_result.key.private_key is defined
+        
     # ─────────────────────────────────────────────
     # Summary
     # ─────────────────────────────────────────────
@@ -328,3 +351,4 @@
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
           - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
+
