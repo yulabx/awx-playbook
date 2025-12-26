@@ -171,7 +171,7 @@
 
         # 掛上 CloudWatch Agent IAM Role
         iam_instance_profile: "{{ iam_instance_profile_name }}"
-        user_data: "{{ lookup('template', 'templates/cloudwatch_agent_userdata.sh.j2') }}"
+        user_data: "{{ lookup('template', 'templates/cloudwatch_agent_start_userdata.sh.j2') }}"
         
         # 儲存設定
         volumes:
@@ -245,6 +245,7 @@
           - "  2. EC2 有 IAM Role: AmazonSSMManagedInstanceCore"
           - "  3. 網路可連到 ssm.ap-northeast-1.amazonaws.com (或使用 VPC Endpoint)"
           - "══════════════════════════════════════════════════════════"
+
 
 
 
