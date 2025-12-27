@@ -146,6 +146,19 @@
     - set_fact:
         all_subnet_ids: "{{ public_subnet_ids + private_subnet_ids }}"
 
+    - name: Build Interface Endpoint subnet list (one private subnet per AZ)
+      set_fact:
+        vpce_subnet_ids: >-
+          {{
+            subnet_results.results
+            | selectattr('subnet.map_public_ip_on_launch','equalto',false)
+            | groupby('subnet.availability_zone')
+            | map('last')
+            | map('first')
+            | map(attribute='subnet.id')
+            | list
+          }}
+
     # ─────────────────────────────────────────────
     # Validate NAT prerequisites
     # ─────────────────────────────────────────────
@@ -343,14 +356,14 @@
         vpc_id: "{{ vpc_id }}"
         service: "com.amazonaws.{{ cluster_region }}.logs"
         vpc_endpoint_type: Interface
-        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
+        vpc_endpoint_subnets: "{{ vpce_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
       when:
         - enable_cloudwatch_logs_endpoint_effective
         - vpce_sg is defined
-        - all_subnet_ids | length > 0
+        - vpce_subnet_ids | length > 0
 
     - name: Create CloudWatch Metrics Endpoint
       amazon.aws.ec2_vpc_endpoint:
@@ -358,14 +371,14 @@
         vpc_id: "{{ vpc_id }}"
         service: "com.amazonaws.{{ cluster_region }}.monitoring"
         vpc_endpoint_type: Interface
-        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
+        vpc_endpoint_subnets: "{{ vpce_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
       when:
         - enable_cloudwatch_metrics_endpoint_effective
         - vpce_sg is defined
-        - all_subnet_ids | length > 0
+        - vpce_subnet_ids | length > 0
 
     - name: Create STS Endpoint
       amazon.aws.ec2_vpc_endpoint:
@@ -373,14 +386,14 @@
         vpc_id: "{{ vpc_id }}"
         service: "com.amazonaws.{{ cluster_region }}.sts"
         vpc_endpoint_type: Interface
-        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
+        vpc_endpoint_subnets: "{{ vpce_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
       when:
         - enable_sts_endpoint_effective
         - vpce_sg is defined
-        - all_subnet_ids | length > 0
+        - vpce_subnet_ids | length > 0
 
     - name: Create SSM Endpoints
       amazon.aws.ec2_vpc_endpoint:
@@ -388,7 +401,7 @@
         vpc_id: "{{ vpc_id }}"
         service: "com.amazonaws.{{ cluster_region }}.{{ item }}"
         vpc_endpoint_type: Interface
-        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
+        vpc_endpoint_subnets: "{{ vpce_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
@@ -396,7 +409,7 @@
       when:
         - enable_ssm_endpoints_effective
         - vpce_sg is defined
-        - all_subnet_ids | length > 0
+        - vpce_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
     # Key Pair
@@ -437,3 +450,4 @@
           - "CloudWatch Metrics Endpoint Enabled: {{ enable_cloudwatch_metrics_endpoint_effective }}"
           - "STS Endpoint Enabled: {{ enable_sts_endpoint_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
+
