@@ -33,10 +33,28 @@
          | default(default_enable_ssm_endpoints)
          | bool }}
 
-    default_enable_cloudwatch_endpoints: true
-    enable_cloudwatch_endpoints_effective: >-
-      {{ enable_cloudwatch_endpoints
-         | default(default_enable_cloudwatch_endpoints)
+    default_enable_s3_endpoint: false
+    enable_s3_endpoint_effective: >-
+      {{ enable_s3_endpoint
+         | default(default_enable_s3_endpoint)
+         | bool }}
+
+    default_enable_cloudwatch_logs_endpoint: false
+    enable_cloudwatch_logs_endpoint_effective: >-
+      {{ enable_cloudwatch_logs_endpoint
+         | default(default_enable_cloudwatch_logs_endpoint)
+         | bool }}
+
+    default_enable_cloudwatch_metrics_endpoint: true
+    enable_cloudwatch_metrics_endpoint_effective: >-
+      {{ enable_cloudwatch_metrics_endpoint
+         | default(default_enable_cloudwatch_metrics_endpoint)
+         | bool }}
+
+    default_enable_sts_endpoint: true
+    enable_sts_endpoint_effective: >-
+      {{ enable_sts_endpoint
+         | default(default_enable_sts_endpoint)
          | bool }}
 
   tasks:
@@ -125,6 +143,9 @@
           | selectattr('subnet.map_public_ip_on_launch','equalto',false)
           | map(attribute='subnet.id') | list }}"
 
+    - set_fact:
+        all_subnet_ids: "{{ public_subnet_ids + private_subnet_ids }}"
+
     # ─────────────────────────────────────────────
     # Validate NAT prerequisites
     # ─────────────────────────────────────────────
@@ -164,7 +185,7 @@
         tags:
           Name: "{{ project_name }}-rt-private"
           Project: "{{ project_name }}"
-      register: private_rt        
+      register: private_rt
       when: private_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
@@ -218,9 +239,6 @@
         - enable_nat_gateway_effective
         - nat_gw.nat_gateway_id is defined
 
-    # ─────────────────────────────────────────────
-    # Attach NAT to private route table
-    # ─────────────────────────────────────────────
     - name: Attach NAT Gateway to private route table
       amazon.aws.ec2_vpc_route_table:
         region: "{{ cluster_region }}"
@@ -265,7 +283,7 @@
       loop: "{{ subnets }}"
 
     # ─────────────────────────────────────────────
-    # S3 Gateway Endpoint (only when NAT is disabled)
+    # S3 Gateway Endpoint
     # ─────────────────────────────────────────────
     - name: Create S3 Gateway Endpoint
       amazon.aws.ec2_vpc_endpoint:
@@ -282,11 +300,12 @@
           Env: "{{ project_labels.env }}"
           ManagedBy: Ansible
       when:
+        - enable_s3_endpoint_effective
         - private_subnet_ids | length > 0
-        - not enable_nat_gateway_effective
+        - private_rt is defined
 
     # ─────────────────────────────────────────────
-    # VPC Endpoints
+    # VPC Endpoint SG
     # ─────────────────────────────────────────────
     - name: Create VPC Endpoint SG
       amazon.aws.ec2_security_group:
@@ -310,29 +329,58 @@
           ManagedBy: Ansible
       register: vpce_sg
       when:
-        - private_subnet_ids | length > 0
-        - enable_cloudwatch_endpoints_effective
+        - enable_sts_endpoint_effective
+          or enable_cloudwatch_logs_endpoint_effective
+          or enable_cloudwatch_metrics_endpoint_effective
           or enable_ssm_endpoints_effective
 
-    - name: Create CloudWatch / STS Endpoints
+    # ─────────────────────────────────────────────
+    # Interface Endpoints
+    # ─────────────────────────────────────────────
+    - name: Create CloudWatch Logs Endpoint
       amazon.aws.ec2_vpc_endpoint:
         region: "{{ cluster_region }}"
         vpc_id: "{{ vpc_id }}"
-        service: "com.amazonaws.{{ cluster_region }}.{{ item }}"
+        service: "com.amazonaws.{{ cluster_region }}.logs"
         vpc_endpoint_type: Interface
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
+        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
-        tags:
-          Name: "{{ project_name }}-vpce-{{ item }}"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-          ManagedBy: Ansible
-      loop: [monitoring, logs, sts]
       when:
-        - enable_cloudwatch_endpoints_effective
-        - private_subnet_ids | length > 0
+        - enable_cloudwatch_logs_endpoint_effective
+        - vpce_sg is defined
+        - all_subnet_ids | length > 0
+
+    - name: Create CloudWatch Metrics Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.monitoring"
+        vpc_endpoint_type: Interface
+        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
+        vpc_endpoint_security_groups:
+          - "{{ vpce_sg.group_id }}"
+        state: present
+      when:
+        - enable_cloudwatch_metrics_endpoint_effective
+        - vpce_sg is defined
+        - all_subnet_ids | length > 0
+
+    - name: Create STS Endpoint
+      amazon.aws.ec2_vpc_endpoint:
+        region: "{{ cluster_region }}"
+        vpc_id: "{{ vpc_id }}"
+        service: "com.amazonaws.{{ cluster_region }}.sts"
+        vpc_endpoint_type: Interface
+        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
+        vpc_endpoint_security_groups:
+          - "{{ vpce_sg.group_id }}"
+        state: present
+      when:
+        - enable_sts_endpoint_effective
+        - vpce_sg is defined
+        - all_subnet_ids | length > 0
 
     - name: Create SSM Endpoints
       amazon.aws.ec2_vpc_endpoint:
@@ -340,19 +388,15 @@
         vpc_id: "{{ vpc_id }}"
         service: "com.amazonaws.{{ cluster_region }}.{{ item }}"
         vpc_endpoint_type: Interface
-        vpc_endpoint_subnets: "{{ private_subnet_ids }}"
+        vpc_endpoint_subnets: "{{ all_subnet_ids }}"
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
-        tags:
-          Name: "{{ project_name }}-vpce-{{ item }}"
-          Project: "{{ project_name }}"
-          Env: "{{ project_labels.env }}"
-          ManagedBy: Ansible
       loop: [ssm, ec2messages, ssmmessages]
       when:
         - enable_ssm_endpoints_effective
-        - private_subnet_ids | length > 0
+        - vpce_sg is defined
+        - all_subnet_ids | length > 0
 
     # ─────────────────────────────────────────────
     # Key Pair
@@ -388,6 +432,8 @@
           - "Private Subnets: {{ private_subnet_ids }}"
           - "NAT Enabled (effective): {{ enable_nat_gateway_effective }}"
           - "NAT Gateway: {{ nat_gateway_id | default('N/A') }}"
-          - "CloudWatch Endpoints Enabled: {{ enable_cloudwatch_endpoints_effective }}"
+          - "S3 Endpoint Enabled: {{ enable_s3_endpoint_effective }}"
+          - "CloudWatch Logs Endpoint Enabled: {{ enable_cloudwatch_logs_endpoint_effective }}"
+          - "CloudWatch Metrics Endpoint Enabled: {{ enable_cloudwatch_metrics_endpoint_effective }}"
+          - "STS Endpoint Enabled: {{ enable_sts_endpoint_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
-
