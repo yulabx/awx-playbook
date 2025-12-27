@@ -51,7 +51,7 @@
          | default(default_enable_cloudwatch_metrics_endpoint)
          | bool }}
 
-    default_enable_sts_endpoint: true
+    default_enable_sts_endpoint: false
     enable_sts_endpoint_effective: >-
       {{ enable_sts_endpoint
          | default(default_enable_sts_endpoint)
@@ -470,5 +470,6 @@
           - "CloudWatch Metrics Endpoint Enabled: {{ enable_cloudwatch_metrics_endpoint_effective }}"
           - "STS Endpoint Enabled: {{ enable_sts_endpoint_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
+
 
 
