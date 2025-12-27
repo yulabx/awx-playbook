@@ -360,6 +360,11 @@
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
+        tags:
+          Name: "{{ project_name }}-vpce-logs"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
       when:
         - enable_cloudwatch_logs_endpoint_effective
         - vpce_sg is defined
@@ -375,6 +380,11 @@
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
+        tags:
+          Name: "{{ project_name }}-vpce-monitoring"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible
       when:
         - enable_cloudwatch_metrics_endpoint_effective
         - vpce_sg is defined
@@ -390,6 +400,11 @@
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
+        tags:
+          Name: "{{ project_name }}-vpce-sts"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible        
       when:
         - enable_sts_endpoint_effective
         - vpce_sg is defined
@@ -405,6 +420,11 @@
         vpc_endpoint_security_groups:
           - "{{ vpce_sg.group_id }}"
         state: present
+        tags:
+          Name: "{{ project_name }}-vpce-{{ item }}"
+          Project: "{{ project_name }}"
+          Env: "{{ project_labels.env }}"
+          ManagedBy: Ansible        
       loop: [ssm, ec2messages, ssmmessages]
       when:
         - enable_ssm_endpoints_effective
@@ -450,4 +470,5 @@
           - "CloudWatch Metrics Endpoint Enabled: {{ enable_cloudwatch_metrics_endpoint_effective }}"
           - "STS Endpoint Enabled: {{ enable_sts_endpoint_effective }}"
           - "SSM Endpoints Enabled: {{ enable_ssm_endpoints_effective }}"
+
 
